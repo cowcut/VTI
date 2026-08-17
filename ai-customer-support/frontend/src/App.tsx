@@ -1,241 +1,67 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 
-type User = {
-  id: string
-  name: string
-  email: string
-  role: string
-  avatar?: string
-  createdAt?: string
-  updatedAt?: string
-}
+type Role = 'admin' | 'agent' | 'customer'
+type User = { id: string; name: string; email: string; role: Role; isActive?: boolean }
+type Account = { id: string; name: string; email: string; role: Role; isActive: boolean; lastLoginAt?: string; createdAt: string }
+type Conversation = { _id: string; subject?: string; status: 'open' | 'pending' | 'resolved' | 'closed'; mode: 'ai' | 'human'; lastMessageAt: string; customer?: { name: string; email: string }; assignedAgent?: { name: string } }
+type Message = { _id: string; content: string; senderType: 'customer' | 'agent' | 'ai' | 'system'; createdAt: string }
+type Api<T> = { success: boolean; message?: string } & T
+type Auth = { token?: string; user?: User; message?: string }
+type View = 'widget' | 'inbox' | 'accounts'
 
-type AuthResponse = {
-  success: boolean
-  message?: string
-  token?: string
-  user?: User
-}
-
-type Mode = 'login' | 'register'
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000'
+const API = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:3000'
 const TOKEN_KEY = 'ai_customer_support_token'
+const statuses: Conversation['status'][] = ['open', 'pending', 'resolved', 'closed']
 
 function App() {
-  const [mode, setMode] = useState<Mode>('login')
-  const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? '')
   const [user, setUser] = useState<User | null>(null)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState('')
+  const [view, setView] = useState<View>('widget')
+  const [conversations, setConversations] = useState<Conversation[]>([]); const [active, setActive] = useState<Conversation | null>(null); const [messages, setMessages] = useState<Message[]>([])
+  const [newSubject, setNewSubject] = useState(''); const [draft, setDraft] = useState(''); const [filter, setFilter] = useState<'all' | Conversation['status']>('all')
+  const [accounts, setAccounts] = useState<Account[]>([]); const [accountQuery, setAccountQuery] = useState(''); const [accountRole, setAccountRole] = useState<'all' | Role>('all')
+  const [notice, setNotice] = useState(''); const [busy, setBusy] = useState(false)
+  const isStaff = user?.role === 'admin' || user?.role === 'agent'; const isAdmin = user?.role === 'admin'
+  const shownConversations = useMemo(() => filter === 'all' ? conversations : conversations.filter((item) => item.status === filter), [conversations, filter])
 
-  const isRegister = mode === 'register'
+  const logout = useCallback(() => { localStorage.removeItem(TOKEN_KEY); setToken(''); setUser(null); setActive(null); setMessages([]); setConversations([]); setAccounts([]); setNotice('') }, [])
+  const loadConversations = useCallback(async (activeToken = token) => { try { const data = await request<Api<{ conversations: Conversation[] }>>('/api/conversations?limit=50', activeToken); setConversations(data.conversations); setActive((current) => data.conversations.find((item) => item._id === current?._id) ?? data.conversations[0] ?? null) } catch (error) { setNotice(errorText(error)) } }, [token])
+  const loadMessages = useCallback(async (id: string) => { try { const data = await request<Api<{ messages: Message[] }>>(`/api/conversations/${id}/messages`, token); setMessages(data.messages) } catch (error) { setNotice(errorText(error)) } }, [token])
+  const loadAccounts = useCallback(async () => { try { const query = new URLSearchParams({ limit: '100' }); if (accountQuery.trim()) query.set('q', accountQuery.trim()); if (accountRole !== 'all') query.set('role', accountRole); const data = await request<Api<{ accounts: Account[] }>>(`/api/accounts?${query}`, token); setAccounts(data.accounts) } catch (error) { setNotice(errorText(error)) } }, [accountQuery, accountRole, token])
+  const restoreSession = useCallback(async () => { try { const data = await request<Api<{ user: User }>>('/api/auth/me', token); setUser(data.user); await loadConversations(token) } catch { logout() } }, [loadConversations, logout, token])
 
-  const authStatus = useMemo(() => {
-    if (user) return `Đang đăng nhập: ${user.name} (${user.role})`
-    if (token) return 'Đã có token, đang kiểm tra phiên đăng nhập...'
-    return 'Chưa đăng nhập'
-  }, [token, user])
+  useEffect(() => { if (token) void restoreSession() }, [token, restoreSession])
+  useEffect(() => { if (active && token) void loadMessages(active._id) }, [active, loadMessages, token])
+  useEffect(() => { if (isStaff) setView('inbox') }, [isStaff])
+  useEffect(() => { if (view === 'accounts' && isAdmin) void loadAccounts() }, [view, isAdmin, loadAccounts])
 
-  useEffect(() => {
-    if (!token) return
+  async function submitAuth(event: FormEvent) { event.preventDefault(); setBusy(true); setNotice(''); try { const data = await request<Auth>(authMode === 'register' ? '/api/auth/register' : '/api/auth/login', '', { method: 'POST', body: JSON.stringify(authMode === 'register' ? { name, email, password } : { email, password }) }); if (!data.token || !data.user) throw new Error('Không thể tạo phiên đăng nhập'); localStorage.setItem(TOKEN_KEY, data.token); setToken(data.token); setUser(data.user); setPassword(''); await loadConversations(data.token) } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
+  async function createConversation(event: FormEvent) { event.preventDefault(); setBusy(true); try { const data = await request<Api<{ conversation: Conversation }>>('/api/conversations', token, { method: 'POST', body: JSON.stringify({ subject: newSubject.trim() || 'Yêu cầu hỗ trợ mới' }) }); setNewSubject(''); await loadConversations(); setActive(data.conversation); setNotice('Đã mở yêu cầu hỗ trợ.') } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
+  async function sendMessage(event: FormEvent) { event.preventDefault(); if (!active || !draft.trim()) return; setBusy(true); try { const result = await request<Api<{ message: Message; aiMessage?: Message | null; handoffMessage?: Message | null }>>(`/api/conversations/${active._id}/messages`, token, { method: 'POST', body: JSON.stringify({ content: draft.trim() }) }); setMessages((current) => [...current, result.message, ...(result.aiMessage ? [result.aiMessage] : []), ...(result.handoffMessage ? [result.handoffMessage] : [])]); setDraft(''); await loadConversations() } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
+  async function updateStatus(status: Conversation['status']) { if (!active) return; setBusy(true); try { const data = await request<Api<{ conversation: Conversation }>>(`/api/conversations/${active._id}/status`, token, { method: 'PATCH', body: JSON.stringify({ status }) }); setActive(data.conversation); await loadConversations(); setNotice('Đã cập nhật trạng thái ticket.') } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
+  async function handoff() { if (!active) return; setBusy(true); try { const data = await request<Api<{ conversation: Conversation }>>(`/api/conversations/${active._id}/handoff`, token, { method: 'POST' }); setActive(data.conversation); await Promise.all([loadMessages(active._id), loadConversations()]); setNotice('Đã nhận xử lý cuộc hội thoại.') } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
+  async function updateAccount(account: Account, changes: Partial<Pick<Account, 'role' | 'isActive'>>) { setBusy(true); try { await request(`/api/accounts/${account.id}`, token, { method: 'PATCH', body: JSON.stringify(changes) }); await loadAccounts(); setNotice('Đã cập nhật tài khoản.') } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) } }
 
-    const loadMe = async () => {
-      try {
-        const data = await apiRequest<AuthResponse>('/api/auth/me', {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (data.user) setUser(data.user)
-      } catch {
-        localStorage.removeItem(TOKEN_KEY)
-        setToken('')
-        setUser(null)
-      }
-    }
-
-    loadMe()
-  }, [token])
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setLoading(true)
-    setMessage('')
-    setError('')
-
-    try {
-      const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login'
-      const payload = isRegister ? { name, email, password } : { email, password }
-      const data = await apiRequest<AuthResponse>(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      })
-
-      if (!data.token || !data.user) {
-        throw new Error('Backend không trả về token hoặc user')
-      }
-
-      localStorage.setItem(TOKEN_KEY, data.token)
-      setToken(data.token)
-      setUser(data.user)
-      setPassword('')
-      setMessage(data.message ?? (isRegister ? 'Đăng ký thành công' : 'Đăng nhập thành công'))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Có lỗi xảy ra')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  const handleLogout = () => {
-    localStorage.removeItem(TOKEN_KEY)
-    setToken('')
-    setUser(null)
-    setMessage('Đã đăng xuất')
-    setError('')
-  }
-
-  const handleModeChange = (nextMode: Mode) => {
-    setMode(nextMode)
-    setMessage('')
-    setError('')
-  }
-
-  return (
-    <main className="app-shell">
-      <section className="hero-card">
-        <div className="eyebrow">AI Customer Support Platform</div>
-        <h1>Frontend kết nối Backend Auth</h1>
-        <p>
-          Giao diện đăng ký, đăng nhập và xem thông tin tài khoản đang dùng trực tiếp
-          các API <code>/api/auth/register</code>, <code>/api/auth/login</code>,{' '}
-          <code>/api/auth/me</code>.
-        </p>
-        <div className="status-card">
-          <span>Trạng thái</span>
-          <strong>{authStatus}</strong>
-        </div>
-      </section>
-
-      <section className="auth-layout">
-        <div className="panel auth-panel">
-          <div className="tabs" role="tablist" aria-label="Auth mode">
-            <button
-              className={mode === 'login' ? 'active' : ''}
-              type="button"
-              onClick={() => handleModeChange('login')}
-            >
-              Đăng nhập
-            </button>
-            <button
-              className={mode === 'register' ? 'active' : ''}
-              type="button"
-              onClick={() => handleModeChange('register')}
-            >
-              Đăng ký
-            </button>
-          </div>
-
-          <form onSubmit={handleSubmit} className="auth-form">
-            {isRegister && (
-              <label>
-                Họ tên
-                <input
-                  autoComplete="name"
-                  minLength={2}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="Nguyễn Văn A"
-                  required
-                  value={name}
-                />
-              </label>
-            )}
-
-            <label>
-              Email
-              <input
-                autoComplete="email"
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="customer@example.com"
-                required
-                type="email"
-                value={email}
-              />
-            </label>
-
-            <label>
-              Mật khẩu
-              <input
-                autoComplete={isRegister ? 'new-password' : 'current-password'}
-                minLength={6}
-                onChange={(event) => setPassword(event.target.value)}
-                placeholder="Tối thiểu 6 ký tự"
-                required
-                type="password"
-                value={password}
-              />
-            </label>
-
-            <button className="primary-button" disabled={loading} type="submit">
-              {loading ? 'Đang xử lý...' : isRegister ? 'Tạo tài khoản' : 'Đăng nhập'}
-            </button>
-          </form>
-
-          {message && <div className="alert success">{message}</div>}
-          {error && <div className="alert error">{error}</div>}
-        </div>
-
-        <div className="panel profile-panel">
-          <h2>Thông tin tài khoản</h2>
-          {user ? (
-            <div className="profile-card">
-              <div className="avatar">{user.name.charAt(0).toUpperCase()}</div>
-              <div>
-                <h3>{user.name}</h3>
-                <p>{user.email}</p>
-                <span>{user.role}</span>
-              </div>
-              <button className="ghost-button" onClick={handleLogout} type="button">
-                Đăng xuất
-              </button>
-            </div>
-          ) : (
-            <div className="empty-state">
-              <h3>Chưa có user</h3>
-              <p>Đăng nhập hoặc đăng ký để gọi endpoint /api/auth/me.</p>
-            </div>
-          )}
-
-          <div className="api-list">
-            <h3>Backend đang dùng</h3>
-            <code>{API_BASE_URL}</code>
-            <ul>
-              <li>POST /api/auth/register</li>
-              <li>POST /api/auth/login</li>
-              <li>GET /api/auth/me</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-    </main>
-  )
+  if (!user) return <AuthScreen {...{ authMode, setAuthMode, name, setName, email, setEmail, password, setPassword, busy, notice, onSubmit: submitAuth }} />
+  return <main className="app-frame"><Topbar {...{ user, view, setView, isStaff, isAdmin, logout }} />
+    {view === 'accounts' && isAdmin ? <AccountManager {...{ accounts, accountQuery, setAccountQuery, accountRole, setAccountRole, loadAccounts, updateAccount, user, busy }} /> : view === 'widget' || !isStaff ? <CustomerWidget {...{ active, messages, subject: newSubject, setSubject: setNewSubject, draft, setDraft, createConversation, sendMessage, busy }} /> : <AgentInbox {...{ conversations: shownConversations, active, messages, filter, setFilter, selectConversation: setActive, draft, setDraft, sendMessage, updateStatus, handoff, busy }} />}
+    {notice && <button className="toast" onClick={() => setNotice('')}>{notice} ×</button>}<footer>© 2026 Customer Support Workspace <span>•</span> Account, conversation & AI operations</footer></main>
 }
 
-async function apiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, options)
-  const data = (await response.json().catch(() => ({}))) as T & { message?: string }
-
-  if (!response.ok) {
-    throw new Error(data.message ?? `Request failed with status ${response.status}`)
-  }
-
-  return data
-}
-
+function AuthScreen(props: { authMode: 'login' | 'register'; setAuthMode: (mode: 'login' | 'register') => void; name: string; setName: (value: string) => void; email: string; setEmail: (value: string) => void; password: string; setPassword: (value: string) => void; busy: boolean; notice: string; onSubmit: (event: FormEvent) => void }) { const p = props; return <main className="auth-page"><section className="auth-card"><div className="logo-mark">▣</div><p className="product-name">Customer Support</p><h1>Trung tâm hỗ trợ thông minh.</h1><p>Tạo yêu cầu, theo dõi xử lý và trao đổi trực tiếp với đội hỗ trợ.</p><div className="auth-tabs"><button className={p.authMode === 'login' ? 'selected' : ''} onClick={() => p.setAuthMode('login')}>Đăng nhập</button><button className={p.authMode === 'register' ? 'selected' : ''} onClick={() => p.setAuthMode('register')}>Đăng ký</button></div><form onSubmit={p.onSubmit}>{p.authMode === 'register' && <input required minLength={2} value={p.name} onChange={(e) => p.setName(e.target.value)} placeholder="Họ và tên" />}<input required type="email" value={p.email} onChange={(e) => p.setEmail(e.target.value)} placeholder="Email" /><input required minLength={6} value={p.password} onChange={(e) => p.setPassword(e.target.value)} type="password" placeholder="Mật khẩu" /><button className="action primary" disabled={p.busy}>{p.busy ? 'Đang xử lý...' : p.authMode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}</button></form>{p.notice && <p className="form-notice">{p.notice}</p>}</section></main> }
+function Topbar({ user, view, setView, isStaff, isAdmin, logout }: { user: User; view: View; setView: (view: View) => void; isStaff: boolean; isAdmin: boolean; logout: () => void }) { return <header className="topbar"><div className="brand"><div className="logo-mark">▣</div><div><strong>Customer<br />Support</strong><small>Conversation Workspace</small></div></div><nav><button className={view === 'widget' ? 'nav-active' : ''} onClick={() => setView('widget')}>▢ Customer</button>{isStaff && <button className={view === 'inbox' ? 'nav-active' : ''} onClick={() => setView('inbox')}>▤ Agent Inbox</button>}{isAdmin && <button className={view === 'accounts' ? 'nav-active' : ''} onClick={() => setView('accounts')}>♙ Tài khoản</button>}<span className="nav-note">● Online</span></nav><div className="account"><span>{user.name}</span><small>{user.role}</small><button onClick={logout}>Đăng xuất</button></div></header> }
+function CustomerWidget({ active, messages, subject, setSubject, draft, setDraft, createConversation, sendMessage, busy }: { active: Conversation | null; messages: Message[]; subject: string; setSubject: (value: string) => void; draft: string; setDraft: (value: string) => void; createConversation: (event: FormEvent) => void; sendMessage: (event: FormEvent) => void; busy: boolean }) { return <section className="workspace widget-workspace"><section className="intro"><div><p className="kicker">LIVE CUSTOMER WIDGET</p><h1>Hỗ trợ nhanh, rõ ràng, liên tục.</h1><p>Gửi yêu cầu mới hoặc tiếp tục cuộc hội thoại đang mở của bạn.</p></div><div className="mode-tag">● Customer mode</div></section>{!active ? <form className="start-ticket" onSubmit={createConversation}><label>Bắt đầu yêu cầu hỗ trợ<input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Ví dụ: Không thể đăng nhập tài khoản" /></label><button className="action primary" disabled={busy}>Mở cuộc hội thoại</button></form> : <section className="chat-shell"><header className="chat-header"><div className="bot-avatar">✦</div><div><strong>{active.mode === 'human' ? 'Nhân viên hỗ trợ' : 'Support Assistant'}</strong><small>{active.mode === 'human' ? 'Đang được nhân viên xử lý' : 'Trực tuyến • Sẵn sàng tiếp nhận'}</small></div><span className={`status-pill ${active.status}`}>{labelStatus(active.status)}</span></header><div className="chat-history">{messages.length === 0 && <WelcomeMessage />}{messages.map((message) => <MessageBubble key={message._id} message={message} />)}</div><form className="message-composer" onSubmit={sendMessage}><input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Nhập nội dung bạn cần hỗ trợ..." /><button className="send-button" disabled={busy || !draft.trim()}>➤</button></form></section>}</section> }
+function AgentInbox({ conversations, active, messages, filter, setFilter, selectConversation, draft, setDraft, sendMessage, updateStatus, handoff, busy }: { conversations: Conversation[]; active: Conversation | null; messages: Message[]; filter: 'all' | Conversation['status']; setFilter: (value: 'all' | Conversation['status']) => void; selectConversation: (conversation: Conversation) => void; draft: string; setDraft: (value: string) => void; sendMessage: (event: FormEvent) => void; updateStatus: (status: Conversation['status']) => void; handoff: () => void; busy: boolean }) { return <section className="workspace inbox-workspace"><section className="metrics"><Metric label="Tổng ticket" value={conversations.length} /><Metric label="AI đang hỗ trợ" value={conversations.filter((x) => x.mode === 'ai').length} /><Metric label="Cần nhân viên" value={conversations.filter((x) => x.mode === 'human' && x.status !== 'resolved').length} /><Metric label="Đã hoàn tất" value={conversations.filter((x) => x.status === 'resolved' || x.status === 'closed').length} /></section><section className="inbox-grid"><aside className="ticket-list"><div className="ticket-filters"><select value={filter} onChange={(e) => setFilter(e.target.value as 'all' | Conversation['status'])}><option value="all">Tất cả trạng thái</option>{statuses.map((x) => <option key={x} value={x}>{labelStatus(x)}</option>)}</select></div><div className="tickets">{conversations.map((item) => <button className={item._id === active?._id ? 'ticket selected-ticket' : 'ticket'} onClick={() => selectConversation(item)} key={item._id}><div><small>#{item._id.slice(-6).toUpperCase()}</small><span className={`tiny-status ${item.status}`}>{labelStatus(item.status)}</span></div><strong>{item.subject || 'Yêu cầu hỗ trợ'}</strong><p>{item.customer?.name ?? 'Khách hàng'} · {relativeTime(item.lastMessageAt)}</p><footer><span>{item.mode === 'human' ? 'Nhân viên' : 'AI bot'}</span></footer></button>)}{!conversations.length && <p className="empty-copy">Chưa có ticket phù hợp.</p>}</div></aside><section className="agent-detail">{active ? <><header className="detail-header"><div className="customer-line"><div className="customer-avatar">{(active.customer?.name ?? 'K').charAt(0)}</div><div><strong>{active.customer?.name ?? 'Khách hàng'}</strong><small>{active.customer?.email ?? 'Không có email'} · #{active._id.slice(-6).toUpperCase()}</small></div></div><div className="management"><select value={active.status} onChange={(e) => updateStatus(e.target.value as Conversation['status'])}>{statuses.map((x) => <option key={x} value={x}>{labelStatus(x)}</option>)}</select>{!active.assignedAgent && <button className="action outline" disabled={busy} onClick={handoff}>Nhận xử lý</button>}</div></header><div className="agent-messages">{messages.map((message) => <MessageBubble key={message._id} message={message} />)}</div><form className="agent-composer" onSubmit={sendMessage}><textarea value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Trả lời khách hàng..." /><button className="action primary" disabled={busy || !draft.trim()}>Gửi phản hồi</button></form></> : <div className="detail-empty">Chọn ticket để bắt đầu xử lý.</div>}</section></section></section> }
+function AccountManager({ accounts, accountQuery, setAccountQuery, accountRole, setAccountRole, loadAccounts, updateAccount, user, busy }: { accounts: Account[]; accountQuery: string; setAccountQuery: (x: string) => void; accountRole: 'all' | Role; setAccountRole: (x: 'all' | Role) => void; loadAccounts: () => Promise<void>; updateAccount: (account: Account, changes: Partial<Pick<Account, 'role' | 'isActive'>>) => Promise<void>; user: User; busy: boolean }) { return <section className="workspace account-workspace"><section className="intro"><div><p className="kicker">ADMIN ACCOUNT CONTROL</p><h1>Quản lý customer, agent và admin.</h1><p>Thay đổi role, vô hiệu hóa tài khoản và kiểm tra hoạt động gần nhất.</p></div><div className="mode-tag">● Administrator only</div></section><section className="account-panel"><div className="account-filters"><input value={accountQuery} onChange={(e) => setAccountQuery(e.target.value)} placeholder="Tìm theo tên hoặc email" /><select value={accountRole} onChange={(e) => setAccountRole(e.target.value as 'all' | Role)}><option value="all">Tất cả role</option><option value="customer">Customer</option><option value="agent">Agent</option><option value="admin">Admin</option></select><button className="action primary" onClick={() => void loadAccounts()} disabled={busy}>Tìm tài khoản</button></div><div className="account-table"><div className="account-row account-heading"><span>Tài khoản</span><span>Role</span><span>Trạng thái</span><span>Đăng nhập gần nhất</span><span>Điều khiển</span></div>{accounts.map((account) => <div className="account-row" key={account.id}><div><strong>{account.name}</strong><small>{account.email}<br />Tạo: {new Date(account.createdAt).toLocaleDateString('vi-VN')}</small></div><select value={account.role} onChange={(e) => void updateAccount(account, { role: e.target.value as Role })} disabled={busy || account.id === user.id}><option value="customer">Customer</option><option value="agent">Agent</option><option value="admin">Admin</option></select><span className={account.isActive ? 'account-active' : 'account-disabled'}>{account.isActive ? 'Hoạt động' : 'Đã khóa'}</span><small>{account.lastLoginAt ? new Date(account.lastLoginAt).toLocaleString('vi-VN') : 'Chưa từng đăng nhập'}</small><button className="action outline" disabled={busy || account.id === user.id} onClick={() => void updateAccount(account, { isActive: !account.isActive })}>{account.isActive ? 'Khóa' : 'Mở khóa'}</button></div>)}{!accounts.length && <p className="empty-copy">Không có tài khoản phù hợp.</p>}</div></section></section> }
+function Metric({ label, value }: { label: string; value: number }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div> }
+function WelcomeMessage() { return <article className="bubble ai"><small>Support Assistant</small><p>Xin chào! Bạn đang cần hỗ trợ về vấn đề gì?</p></article> }
+function MessageBubble({ message }: { message: Message }) { const label = message.senderType === 'customer' ? 'Khách hàng' : message.senderType === 'agent' ? 'Nhân viên hỗ trợ' : message.senderType === 'system' ? 'Hệ thống' : 'Support Assistant'; return <article className={`bubble ${message.senderType}`}><small>{label}<time>{new Date(message.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</time></small><p>{message.content}</p></article> }
+function labelStatus(status: Conversation['status']) { return ({ open: 'Mới mở', pending: 'Đang xử lý', resolved: 'Đã hoàn tất', closed: 'Đã đóng' })[status] }
+function relativeTime(value: string) { const minutes = Math.max(1, Math.round((Date.now() - new Date(value).getTime()) / 60000)); return minutes < 60 ? `${minutes} phút trước` : `${Math.floor(minutes / 60)} giờ trước` }
+async function request<T>(path: string, token = '', options: RequestInit = {}): Promise<T> { const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } }); const data = await response.json().catch(() => ({})) as T & { message?: string }; if (!response.ok) throw new Error(data.message ?? `Lỗi ${response.status}`); return data }
+function errorText(error: unknown) { return error instanceof Error ? error.message : 'Có lỗi xảy ra' }
 export default App

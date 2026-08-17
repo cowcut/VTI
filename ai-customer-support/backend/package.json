@@ -1,8 +1,13 @@
 {
+  "name": "@ai-customer-support/backend",
+  "private": true,
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "test": "npm run build && node --test tests/unit/*.test.js",
+    "start": "node dist/server.js",
+    "create:admin": "ts-node-dev --transpile-only --exit-child src/scripts/create-admin.ts",
+    "migrate:atlas": "npm run build && node dist/scripts/migrate-to-atlas.js"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

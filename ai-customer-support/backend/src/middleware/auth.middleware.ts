@@ -22,10 +22,10 @@ export const protect = async (
     const payload = verifyAuthToken(token);
     const user = await User.findById(payload.id);
 
-    if (!user) {
+    if (!user || !user.isActive) {
       return res.status(401).json({
         success: false,
-        message: "Not authorized, user not found",
+        message: "Not authorized, user not found or disabled",
       });
     }
 

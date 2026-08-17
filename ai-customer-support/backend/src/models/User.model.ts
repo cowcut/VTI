@@ -9,6 +9,8 @@ export interface IUser extends Document {
   password: string;
   role: UserRole;
   avatar?: string;
+  isActive: boolean;
+  lastLoginAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   comparePassword(candidatePassword: string): Promise<boolean>;
@@ -45,6 +47,17 @@ const userSchema = new Schema<IUser>(
 
     avatar: {
       type: String,
+    },
+
+    isActive: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+
+    lastLoginAt: {
+      type: Date,
+      default: null,
     },
   },
   {

@@ -9,6 +9,8 @@ const sanitizeUser = (user: any) => ({
   email: user.email,
   role: user.role,
   avatar: user.avatar,
+  isActive: user.isActive,
+  lastLoginAt: user.lastLoginAt,
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
 });
@@ -43,7 +45,7 @@ export const register = async (
       });
     }
 
-    const user = await User.create({ name, email, password, role });
+    const user = await User.create({ name, email, password, role: "customer" });
     const token = signAuthToken(user._id.toString());
 
     return res.status(201).json({
@@ -80,6 +82,15 @@ export const login = async (
       });
     }
 
+    if (!user.isActive) {
+      return res.status(403).json({
+        success: false,
+        message: "This account has been disabled. Contact an administrator.",
+      });
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
     const token = signAuthToken(user._id.toString());
 
     return res.status(200).json({
