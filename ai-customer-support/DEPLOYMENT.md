@@ -1,80 +1,113 @@
-# Public deployment checklist
+# Public deployment: Vercel + Railway
 
-## 1. MongoDB Atlas
-
-1. Create an Atlas organization/project and a production cluster.
-2. Create a database user with a strong generated password and least privileges for the application database.
-3. In Network Access, allow the backend host's outbound IP range. Do not allow `0.0.0.0/0` unless temporarily required for a controlled test.
-4. Copy the SRV URI, replace its placeholders, and set it as `MONGODB_URI` only in the backend hosting provider's secret UI.
-5. Enable automated backups before opening the service to real customers.
-
-## 2. Rotate Gemini credentials
-
-1. In Google AI Studio, revoke the old Gemini key.
-2. Create a replacement key restricted to the production project where possible.
-3. Set the replacement as `GEMINI_API_KEY` only in the backend hosting provider's secret UI.
-4. Keep `GEMINI_MODEL=gemini-3.7-flash` unless an availability test requires a supported replacement.
-
-Never place an Atlas URI, Gemini key, JWT secret, or account password in Git, frontend variables, screenshots, or issue comments.
-
-## 3. Deploy on Render
-
-The root `render.yaml` defines two services:
+This project is deployed from the `ai-customer-support/` directory of the `cowcut/VTI` repository:
 
 ```text
-ai-customer-support-api  → Node/Express backend
-ai-customer-support-web  → React/Vite static frontend
+Vercel static frontend: https://support.sudtip.fun
+Railway Node API:       https://api.sudtip.fun
+MongoDB Atlas:          production database
 ```
 
-Before creating the Blueprint, replace both service names in `render.yaml` with globally unique names. Keep the frontend name, because its Render URL is used by CORS.
-
-1. Push this project to a private GitHub repository. Do not commit `backend/.env` or `backend/.env.migration`.
-2. In Render Dashboard choose **New → Blueprint**, connect the repository, and accept `render.yaml`.
-3. When Render asks for backend secrets, set:
+The committed deployment configuration contains no credentials:
 
 ```text
-MONGODB_URI=<Atlas URI with a freshly rotated database password>
-JWT_SECRET=<new long random secret>
-GEMINI_API_KEY=<fresh Gemini key>
-CORS_ORIGINS=https://<your-static-service-name>.onrender.com
+vercel.json    Vite frontend build and SPA fallback
+railway.json   Express API build, health check, restart policy
 ```
 
-4. For the static frontend set:
+## 1. Railway: deploy the API
+
+1. In Railway, create a new project and choose **Deploy from GitHub repo**.
+2. Select `cowcut/VTI` and create a service from it.
+3. In the service settings, set **Root Directory** to:
+
+   ```text
+   ai-customer-support
+   ```
+
+4. Railway loads `railway.json` from that directory. It will run:
+
+   ```text
+   npm ci && npm run build:backend
+   npm --prefix backend run start
+   ```
+
+   Its deployment health check is `/api/health`.
+
+5. Add these Railway service variables (never commit or share their values):
+
+   ```env
+   NODE_ENV=production
+   MONGODB_URI=<Atlas production URI>
+   JWT_SECRET=<new cryptographically-random secret>
+   GEMINI_API_KEY=<active Gemini server key>
+   GEMINI_MODEL=gemini-3.7-flash
+   CORS_ORIGINS=https://support.sudtip.fun
+   ```
+
+6. Deploy and open the generated Railway public domain. Confirm:
+
+   ```text
+   https://<railway-domain>/api/health
+   ```
+
+   receives HTTP 200 before attaching the custom domain.
+
+7. Add `api.sudtip.fun` under Railway service **Networking / Custom Domain**. Copy the exact DNS record that Railway displays into the DNS provider for `sudtip.fun`.
+
+## 2. Vercel: deploy the frontend
+
+1. In Vercel, create a new project by importing `cowcut/VTI`.
+2. Set **Root Directory** to:
+
+   ```text
+   ai-customer-support
+   ```
+
+3. Vercel loads `vercel.json` and uses the root lockfile/shared dependency installation:
+
+   ```text
+   npm ci && npm run build:frontend
+   ```
+
+   It publishes `frontend/dist` and provides SPA fallback routing.
+
+4. Before the first production build, add this Vercel environment variable for the Production environment:
+
+   ```env
+   VITE_API_BASE_URL=https://api.sudtip.fun
+   ```
+
+   Vite embeds this value into the compiled browser assets; redeploy after changing it.
+
+5. Add `support.sudtip.fun` in Vercel **Settings / Domains**. Copy the exact DNS record Vercel displays into the DNS provider.
+
+## 3. DNS and acceptance checks
+
+Create only the DNS records shown by Railway and Vercel:
 
 ```text
-VITE_API_BASE_URL=https://<your-api-service-name>.onrender.com
+api.sudtip.fun      -> Railway target shown in its dashboard
+support.sudtip.fun  -> Vercel target shown in its dashboard
 ```
 
-Render injects `VITE_API_BASE_URL` during the static-site build. It must be the backend URL with no trailing `/api`.
-
-5. After both services are live, open:
+After both providers validate DNS and issue HTTPS certificates, verify:
 
 ```text
-https://<your-api-service-name>.onrender.com/api/health
+https://api.sudtip.fun/api/health
+https://support.sudtip.fun
 ```
 
-Expected response:
+Then perform a real browser smoke test: register/login, load an existing conversation, send an AI-mode customer message, and confirm CORS permits only `https://support.sudtip.fun`.
 
-```json
-{"success":true,"message":"AI Customer Support API is running"}
-```
+## Atlas networking
 
-The Render free plan can spin down after inactivity, so the first request may take longer. Use a paid plan before relying on the application for real-time customer support.
+Railway outbound IPs must be permitted by MongoDB Atlas Network Access. Do not assume a home IP allowlist such as `171.241.70.75/32` permits Railway. For an initial controlled deployment, configure Atlas access according to Railway's current outbound-networking guidance, then restrict it to a supported static egress option when available for the selected Railway plan.
 
-## 4. Production security included
+## Security
 
-`NODE_ENV=production` makes `CORS_ORIGINS` mandatory. Browser requests from any other origin are denied.
-
-The backend also limits each client IP as follows:
-
-| Endpoint | Limit |
-| --- | --- |
-| `POST /api/auth/login` | 10 requests / 15 minutes |
-| `POST /api/auth/register` | 5 requests / hour |
-| `POST /api/conversations/:id/messages` | 15 requests / minute |
-
-Rate-limit responses return HTTP 429 with a Vietnamese error message. The message limiter protects Gemini usage and should be reviewed as usage grows.
-
-## 5. Final public smoke test
-
-On the real Render domains, test registration, login, customer message, Gemini reply, automatic handoff, agent reply, account disable, CORS rejection from an unapproved origin, and rate-limit behavior.
+- Keep `.env` and `.env.migration` local only.
+- Do not enter secrets in `vercel.json`, `railway.json`, GitHub, DNS records, or chat.
+- Rotate any credential that was exposed outside a secret manager.
+- Keep `CORS_ORIGINS` exact; do not use `*` in production.
+- Keep Atlas backups and a least-privilege database user enabled.
