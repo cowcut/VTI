@@ -4,6 +4,7 @@ services:
     runtime: node
     region: singapore
     plan: free
+    rootDir: ai-customer-support
     buildCommand: npm ci && npm run build:backend
     startCommand: npm --prefix backend run start
     healthCheckPath: /api/health
@@ -26,8 +27,9 @@ services:
     name: ai-customer-support-web
     runtime: static
     region: singapore
+    rootDir: ai-customer-support
     buildCommand: npm ci && npm run build:frontend
-    staticPublishPath: frontend/dist
+    staticPublishPath: ai-customer-support/frontend/dist
     envVars:
       - key: VITE_API_BASE_URL
         sync: false
