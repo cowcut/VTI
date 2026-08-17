@@ -26,7 +26,6 @@ services:
   - type: web
     name: ai-customer-support-web
     runtime: static
-    region: singapore
     rootDir: ai-customer-support
     buildCommand: npm ci && npm run build:frontend
     staticPublishPath: ai-customer-support/frontend/dist
