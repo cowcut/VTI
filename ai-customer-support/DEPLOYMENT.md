@@ -3,8 +3,8 @@
 This project is deployed from the `ai-customer-support/` directory of the `cowcut/VTI` repository:
 
 ```text
-Vercel static frontend: https://support.sudtip.fun
-Railway Node API:       https://api.sudtip.fun
+Vercel static frontend: https://support.suptid.fun
+Railway Node API:       https://api.suptid.fun
 MongoDB Atlas:          production database
 ```
 
@@ -42,7 +42,7 @@ railway.json   Express API build, health check, restart policy
    JWT_SECRET=<new cryptographically-random secret>
    GEMINI_API_KEY=<active Gemini server key>
    GEMINI_MODEL=gemini-3.7-flash
-   CORS_ORIGINS=https://support.sudtip.fun
+   CORS_ORIGINS=https://support.suptid.fun
    ```
 
 6. Deploy and open the generated Railway public domain. Confirm:
@@ -53,7 +53,7 @@ railway.json   Express API build, health check, restart policy
 
    receives HTTP 200 before attaching the custom domain.
 
-7. Add `api.sudtip.fun` under Railway service **Networking / Custom Domain**. Copy the exact DNS record that Railway displays into the DNS provider for `sudtip.fun`.
+7. Add `api.suptid.fun` under Railway service **Networking / Custom Domain**. Copy the exact DNS record that Railway displays into the DNS provider for `suptid.fun`.
 
 ## 2. Vercel: deploy the frontend
 
@@ -75,30 +75,30 @@ railway.json   Express API build, health check, restart policy
 4. Before the first production build, add this Vercel environment variable for the Production environment:
 
    ```env
-   VITE_API_BASE_URL=https://api.sudtip.fun
+   VITE_API_BASE_URL=https://api.suptid.fun
    ```
 
    Vite embeds this value into the compiled browser assets; redeploy after changing it.
 
-5. Add `support.sudtip.fun` in Vercel **Settings / Domains**. Copy the exact DNS record Vercel displays into the DNS provider.
+5. Add `support.suptid.fun` in Vercel **Settings / Domains**. Copy the exact DNS record Vercel displays into the DNS provider.
 
 ## 3. DNS and acceptance checks
 
 Create only the DNS records shown by Railway and Vercel:
 
 ```text
-api.sudtip.fun      -> Railway target shown in its dashboard
-support.sudtip.fun  -> Vercel target shown in its dashboard
+api.suptid.fun      -> Railway target shown in its dashboard
+support.suptid.fun  -> Vercel target shown in its dashboard
 ```
 
 After both providers validate DNS and issue HTTPS certificates, verify:
 
 ```text
-https://api.sudtip.fun/api/health
-https://support.sudtip.fun
+https://api.suptid.fun/api/health
+https://support.suptid.fun
 ```
 
-Then perform a real browser smoke test: register/login, load an existing conversation, send an AI-mode customer message, and confirm CORS permits only `https://support.sudtip.fun`.
+Then perform a real browser smoke test: register/login, load an existing conversation, send an AI-mode customer message, and confirm CORS permits only `https://support.suptid.fun`.
 
 ## Atlas networking
 
