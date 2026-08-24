@@ -12,4 +12,6 @@ test("conversation API exposes handoff and status endpoints", () => {
   assert.ok(endpoints.includes("POST /:id/handoff"));
   assert.ok(endpoints.includes("PATCH /:id/metadata"));
   assert.ok(endpoints.includes("POST /:id/internal-notes"));
+  assert.ok(endpoints.includes("POST /:id/attachments"));
+  assert.ok(endpoints.includes("GET /attachments/:messageId"));
 });

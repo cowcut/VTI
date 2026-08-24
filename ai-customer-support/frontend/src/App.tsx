@@ -7,10 +7,12 @@ type Status = 'open' | 'pending' | 'resolved' | 'closed'
 type Priority = 'low' | 'normal' | 'high' | 'urgent'
 type Category = 'general' | 'account' | 'billing' | 'technical' | 'other'
 type View = 'widget' | 'inbox' | 'accounts' | 'knowledge'
+type CustomerTab = 'overview' | 'tickets' | 'knowledge'
 type User = { id: string; name: string; email: string; role: Role; isActive?: boolean }
 type Account = { id: string; name: string; email: string; role: Role; isActive: boolean; lastLoginAt?: string; createdAt: string }
 type Conversation = { _id: string; subject?: string; status: Status; mode: 'ai' | 'human'; priority?: Priority; category?: Category; lastMessageAt: string; customer?: { name: string; email: string }; assignedAgent?: { name: string } }
-type Message = { _id: string; content: string; senderType: 'customer' | 'agent' | 'ai' | 'system'; messageType?: 'message' | 'system' | 'internal_note'; createdAt: string }
+type AttachmentMetadata = { fileName?: string; mimeType?: string; size?: number }
+type Message = { _id: string; content: string; senderType: 'customer' | 'agent' | 'ai' | 'system'; messageType?: 'message' | 'file' | 'system' | 'internal_note'; metadata?: AttachmentMetadata; createdAt: string }
 type Article = { _id: string; title: string; content: string; tags: string[]; isPublished?: boolean; updatedAt: string }
 type Api<T> = { success: boolean; message?: string } & T
 type Auth = { token?: string; user?: User; message?: string }
@@ -29,6 +31,7 @@ function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [view, setView] = useState<View>('widget')
+  const [customerTab, setCustomerTab] = useState<CustomerTab>('overview')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [active, setActive] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -45,6 +48,8 @@ function App() {
   const [editingArticle, setEditingArticle] = useState<Article | null>(null)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const [conversationsLoading, setConversationsLoading] = useState(false)
+  const [articlesLoading, setArticlesLoading] = useState(false)
 
   const isStaff = user?.role === 'admin' || user?.role === 'agent'
   const isAdmin = user?.role === 'admin'
@@ -59,11 +64,12 @@ function App() {
     setToken(''); setUser(null); setActive(null); setMessages([]); setConversations([]); setAccounts([]); setArticles([]); setNotice('')
   }, [])
   const loadConversations = useCallback(async (activeToken = token) => {
+    setConversationsLoading(true)
     try {
       const data = await request<Api<{ conversations: Conversation[] }>>('/api/conversations?limit=50', activeToken)
       setConversations(data.conversations)
       setActive((current) => data.conversations.find((item) => item._id === current?._id) ?? data.conversations[0] ?? null)
-    } catch (error) { setNotice(errorText(error)) }
+    } catch (error) { setNotice(errorText(error)) } finally { setConversationsLoading(false) }
   }, [token])
   const loadMessages = useCallback(async (id: string) => {
     try { setMessages((await request<Api<{ messages: Message[] }>>(`/api/conversations/${id}/messages`, token)).messages) } catch (error) { setNotice(errorText(error)) }
@@ -77,10 +83,11 @@ function App() {
     } catch (error) { setNotice(errorText(error)) }
   }, [accountQuery, accountRole, token])
   const loadArticles = useCallback(async (query = '') => {
+    setArticlesLoading(true)
     try {
       const path = query.trim() ? `/api/knowledge-base/search?q=${encodeURIComponent(query.trim())}` : '/api/knowledge-base'
       setArticles((await request<Api<{ articles: Article[] }>>(path, token)).articles)
-    } catch (error) { setNotice(errorText(error)) }
+    } catch (error) { setNotice(errorText(error)) } finally { setArticlesLoading(false) }
   }, [token])
   const restoreSession = useCallback(async () => {
     try {
@@ -94,7 +101,7 @@ function App() {
   useEffect(() => { if (active && token) void loadMessages(active._id) }, [active, loadMessages, token])
   useEffect(() => { if (isStaff) setView('inbox') }, [isStaff])
   useEffect(() => { if (view === 'accounts' && isAdmin) void loadAccounts() }, [view, isAdmin, loadAccounts])
-  useEffect(() => { if (view === 'knowledge' && isAdmin) void loadArticles() }, [view, isAdmin, loadArticles])
+  useEffect(() => { if ((view === 'knowledge' && isAdmin) || (!isStaff && customerTab === 'knowledge')) void loadArticles() }, [view, isAdmin, isStaff, customerTab, loadArticles])
 
   async function submitAuth(event: FormEvent) {
     event.preventDefault(); setBusy(true); setNotice('')
@@ -117,6 +124,24 @@ function App() {
       const result = await request<Api<{ message: Message; aiMessage?: Message | null; handoffMessage?: Message | null }>>(`/api/conversations/${active._id}/messages`, token, { method: 'POST', body: JSON.stringify({ content: draft.trim() }) })
       setMessages((current) => [...current, result.message, ...(result.aiMessage ? [result.aiMessage] : []), ...(result.handoffMessage ? [result.handoffMessage] : [])]); setDraft(''); await loadConversations()
     } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) }
+  }
+  async function uploadAttachment(file: File) {
+    if (!active) return
+    setBusy(true)
+    try {
+      const form = new FormData()
+      form.append('attachment', file)
+      const data = await request<Api<{ message: Message }>>(`/api/conversations/${active._id}/attachments`, token, { method: 'POST', body: form })
+      setMessages((current) => [...current, data.message]); await loadConversations(); setNotice(`Đã gửi tệp ${file.name}.`)
+    } catch (error) { setNotice(errorText(error)) } finally { setBusy(false) }
+  }
+  async function downloadAttachment(message: Message) {
+    try {
+      const response = await fetch(`${API}/api/conversations/attachments/${message._id}`, { headers: { Authorization: `Bearer ${token}` } })
+      if (!response.ok) throw new Error((await response.json().catch(() => ({})) as { message?: string }).message ?? `Lỗi ${response.status}`)
+      const url = URL.createObjectURL(await response.blob())
+      const link = document.createElement('a'); link.href = url; link.download = message.metadata?.fileName ?? 'attachment'; link.click(); URL.revokeObjectURL(url)
+    } catch (error) { setNotice(errorText(error)) }
   }
   async function updateStatus(status: Status) {
     if (!active) return; setBusy(true)
@@ -168,7 +193,7 @@ function App() {
     <Topbar {...{ user, view, setView, isStaff, isAdmin, logout }} />
     {view === 'accounts' && isAdmin ? <AccountManager {...{ accounts, accountQuery, setAccountQuery, accountRole, setAccountRole, loadAccounts, updateAccount, user, busy }} />
       : view === 'knowledge' && isAdmin ? <KnowledgeBase {...{ articles, articleQuery, setArticleQuery, loadArticles, editingArticle, setEditingArticle, saveArticle, deleteArticle, busy }} />
-        : view === 'widget' || !isStaff ? <CustomerWidget {...{ active, messages, subject: newSubject, setSubject: setNewSubject, draft, setDraft, createConversation, sendMessage, busy }} />
+        : view === 'widget' || !isStaff ? <CustomerPortal {...{ user, customerTab, setCustomerTab, conversations, conversationsLoading, active, selectConversation: setActive, messages, subject: newSubject, setSubject: setNewSubject, draft, setDraft, createConversation, sendMessage, uploadAttachment, downloadAttachment, handoff, articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy }} />
           : <AgentInbox {...{ conversations: shownConversations, allConversations: conversations, active, messages, ticketQuery, setTicketQuery, statusFilter, setStatusFilter, priorityFilter, setPriorityFilter, selectConversation: setActive, draft, setDraft, sendMessage, updateStatus, updateMetadata, addInternalNote, handoff, busy }} />}
     {notice && <button className="toast" onClick={() => setNotice('')}>{notice} ×</button>}
     <footer>© 2026 Customer Support Workspace <span>•</span> Account, conversation & AI operations</footer>
@@ -184,8 +209,38 @@ function Topbar({ user, view, setView, isStaff, isAdmin, logout }: { user: User;
   return <header className="topbar"><div className="brand"><div className="logo-mark">✦</div><div><strong>Care<br />Desk</strong><small>Operations workspace</small></div></div><nav><button className={view === 'widget' ? 'nav-active' : ''} onClick={() => setView('widget')}>Customer</button>{isStaff && <button className={view === 'inbox' ? 'nav-active' : ''} onClick={() => setView('inbox')}>Inbox</button>}{isAdmin && <button className={view === 'knowledge' ? 'nav-active' : ''} onClick={() => setView('knowledge')}>Knowledge base</button>}{isAdmin && <button className={view === 'accounts' ? 'nav-active' : ''} onClick={() => setView('accounts')}>Tài khoản</button>}<span className="nav-note">● Online</span></nav><div className="account"><span>{user.name}</span><small>{user.role}</small><button onClick={logout}>Đăng xuất</button></div></header>
 }
 
-function CustomerWidget({ active, messages, subject, setSubject, draft, setDraft, createConversation, sendMessage, busy }: { active: Conversation | null; messages: Message[]; subject: string; setSubject: (value: string) => void; draft: string; setDraft: (value: string) => void; createConversation: (event: FormEvent) => void; sendMessage: (event: FormEvent) => void; busy: boolean }) {
-  return <section className="workspace widget-workspace"><section className="intro"><div><p className="kicker">LIVE CUSTOMER WIDGET</p><h1>Hỗ trợ nhanh, rõ ràng, liên tục.</h1><p>Gửi yêu cầu mới hoặc tiếp tục cuộc hội thoại đang mở của bạn.</p></div><div className="mode-tag">● Customer mode</div></section>{!active ? <form className="start-ticket" onSubmit={createConversation}><label>Bắt đầu yêu cầu hỗ trợ<input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Ví dụ: Không thể đăng nhập tài khoản" /></label><button className="action primary" disabled={busy}>Mở cuộc hội thoại</button></form> : <section className="chat-shell"><header className="chat-header"><div className="bot-avatar">✦</div><div><strong>{active.mode === 'human' ? 'Nhân viên hỗ trợ' : 'Support Assistant'}</strong><small>{active.mode === 'human' ? 'Đang được nhân viên xử lý' : 'Trực tuyến • Sẵn sàng tiếp nhận'}</small></div><span className={`status-pill ${active.status}`}>{labelStatus(active.status)}</span></header><div className="chat-history">{messages.length === 0 && <WelcomeMessage />}{messages.filter((message) => message.messageType !== 'internal_note').map((message) => <MessageBubble key={message._id} message={message} />)}</div><form className="message-composer" onSubmit={sendMessage}><input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder="Nhập nội dung bạn cần hỗ trợ..." /><button className="send-button" disabled={busy || !draft.trim()}>➤</button></form></section>}</section>
+function CustomerPortal({ user, customerTab, setCustomerTab, conversations, conversationsLoading, active, selectConversation, messages, subject, setSubject, draft, setDraft, createConversation, sendMessage, uploadAttachment, downloadAttachment, handoff, articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy }: { user: User; customerTab: CustomerTab; setCustomerTab: (tab: CustomerTab) => void; conversations: Conversation[]; conversationsLoading: boolean; active: Conversation | null; selectConversation: (conversation: Conversation) => void; messages: Message[]; subject: string; setSubject: (value: string) => void; draft: string; setDraft: (value: string) => void; createConversation: (event: FormEvent) => void; sendMessage: (event: FormEvent) => void; uploadAttachment: (file: File) => Promise<void>; downloadAttachment: (message: Message) => Promise<void>; handoff: () => void; articles: Article[]; articleQuery: string; setArticleQuery: (value: string) => void; loadArticles: (query?: string) => Promise<void>; articlesLoading: boolean; busy: boolean }) {
+  const openTickets = conversations.filter((ticket) => ticket.status === 'open' || ticket.status === 'pending')
+  const quickActions = [
+    ['Không thể đăng nhập', 'Tôi cần hỗ trợ truy cập tài khoản'],
+    ['Vấn đề thanh toán', 'Tôi cần kiểm tra thanh toán hoặc hóa đơn'],
+    ['Lỗi kỹ thuật', 'Tôi gặp lỗi khi sử dụng dịch vụ'],
+  ] as const
+  const startFromQuickAction = (ticketSubject: string) => { setSubject(ticketSubject); setCustomerTab('overview') }
+  return <section className="workspace customer-portal">
+    <section className="customer-hero">
+      <div><p className="kicker">CUSTOMER SUPPORT PORTAL</p><h1>Xin chào, {user.name.split(' ')[0]}.</h1><p>Theo dõi yêu cầu của bạn, tìm hướng dẫn đã xuất bản hoặc bắt đầu một cuộc hội thoại mới.</p></div>
+      <div className="portal-profile"><span className="profile-initial">{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>{user.email}</small><small>Khách hàng</small></div></div>
+    </section>
+    <nav className="portal-tabs" aria-label="Điều hướng cổng hỗ trợ"><button className={customerTab === 'overview' ? 'selected' : ''} onClick={() => setCustomerTab('overview')}>Tổng quan</button><button className={customerTab === 'tickets' ? 'selected' : ''} onClick={() => setCustomerTab('tickets')}>Yêu cầu của tôi <span>{conversations.length}</span></button><button className={customerTab === 'knowledge' ? 'selected' : ''} onClick={() => setCustomerTab('knowledge')}>Knowledge Base</button></nav>
+    {customerTab === 'overview' && <section className="portal-overview">
+      <div className="portal-main"><section className="portal-card welcome-card"><div><p className="eyebrow">TRUNG TÂM HỖ TRỢ</p><h2>Bạn cần hỗ trợ về điều gì?</h2><p>Chọn một chủ đề để soạn sẵn yêu cầu, hoặc tiếp tục trao đổi trong ticket gần nhất.</p></div><div className="quick-actions">{quickActions.map(([title, ticketSubject]) => <button key={title} onClick={() => startFromQuickAction(ticketSubject)}><strong>{title}</strong><span>{ticketSubject}</span><b>→</b></button>)}</div></section>
+        <section className="portal-card new-request"><header><div><p className="eyebrow">YÊU CẦU MỚI</p><h2>Tạo cuộc hội thoại</h2></div><span>Đính kèm sau khi mở ticket</span></header><form onSubmit={createConversation}><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Mô tả ngắn vấn đề của bạn" maxLength={200} /><button className="action primary" disabled={busy}>Bắt đầu hỗ trợ</button></form></section>
+        <section className="portal-card widget-section"><div className="widget-section-title"><div><p className="eyebrow">CUỘC HỘI THOẠI</p><h2>{active?.subject || 'Chưa có yêu cầu nào'}</h2><p>{active ? `Ticket #${active._id.slice(-6).toUpperCase()} · ${labelStatus(active.status)}` : 'Tạo một yêu cầu để bắt đầu trao đổi.'}</p></div>{active && <span className={`status-pill ${active.status}`}>{labelStatus(active.status)}</span>}</div>{active ? <><div className="chat-history customer-history">{messages.length === 0 ? <WelcomeMessage /> : messages.filter((message) => message.messageType !== 'internal_note').map((message) => <MessageBubble key={message._id} message={message} onDownload={downloadAttachment} />)}</div><form className="message-composer" onSubmit={sendMessage}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Nhập nội dung bạn cần hỗ trợ..." /><AttachmentControl onUpload={uploadAttachment} busy={busy} /><button className="send-button" aria-label="Gửi tin nhắn" disabled={busy || !draft.trim()}>➤</button></form></> : <div className="customer-empty"><strong>Chưa có cuộc hội thoại đang chọn.</strong><button className="action outline" onClick={() => setCustomerTab('tickets')}>Xem yêu cầu của tôi</button></div>}</section>
+      </div>
+      <aside className="portal-sidebar"><section className="portal-card customer-summary-card"><p className="eyebrow">TỔNG QUAN YÊU CẦU</p><strong>{openTickets.length}</strong><span>yêu cầu đang mở hoặc xử lý</span><button className="action outline" onClick={() => setCustomerTab('tickets')}>Xem lịch sử</button></section><section className="portal-card help-note"><p className="eyebrow">CẬP NHẬT TICKET</p><p>Trạng thái và phản hồi trong danh sách phản ánh dữ liệu hiện có của ticket. Không có thông báo thời gian thực.</p></section></aside>
+    </section>}
+    {customerTab === 'tickets' && <CustomerTickets {...{ conversations, conversationsLoading, active, selectConversation, messages, draft, setDraft, sendMessage, uploadAttachment, downloadAttachment, handoff, busy, setCustomerTab }} />}
+    {customerTab === 'knowledge' && <CustomerKnowledge {...{ articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy, startFromQuickAction }} />}
+  </section>
+}
+
+function CustomerTickets({ conversations, conversationsLoading, active, selectConversation, messages, draft, setDraft, sendMessage, uploadAttachment, downloadAttachment, handoff, busy, setCustomerTab }: { conversations: Conversation[]; conversationsLoading: boolean; active: Conversation | null; selectConversation: (conversation: Conversation) => void; messages: Message[]; draft: string; setDraft: (value: string) => void; sendMessage: (event: FormEvent) => void; uploadAttachment: (file: File) => Promise<void>; downloadAttachment: (message: Message) => Promise<void>; handoff: () => void; busy: boolean; setCustomerTab: (tab: CustomerTab) => void }) {
+  return <section className="customer-ticket-grid"><aside className="customer-ticket-list"><header><div><p className="eyebrow">LỊCH SỬ HỖ TRỢ</p><h2>Yêu cầu của tôi</h2></div><span className="count-badge">{conversations.length}</span></header>{conversationsLoading ? <p className="empty">Đang tải yêu cầu của bạn…</p> : conversations.length ? <div>{conversations.map((ticket) => <button className={ticket._id === active?._id ? 'customer-ticket selected-ticket' : 'customer-ticket'} key={ticket._id} onClick={() => selectConversation(ticket)}><div><small>#{ticket._id.slice(-6).toUpperCase()}</small><span className={`tiny-status ${ticket.status}`}>{labelStatus(ticket.status)}</span></div><strong>{ticket.subject || 'Yêu cầu hỗ trợ'}</strong><p>{ticket.mode === 'human' ? (ticket.assignedAgent ? `Nhân viên: ${ticket.assignedAgent.name}` : 'Đã yêu cầu nhân viên hỗ trợ') : 'Support Assistant'} · {relativeTime(ticket.lastMessageAt)}</p></button>)}</div> : <div className="customer-empty"><strong>Bạn chưa có yêu cầu nào.</strong><button className="action primary" onClick={() => setCustomerTab('overview')}>Tạo yêu cầu mới</button></div>}</aside><section className="customer-ticket-detail">{active ? <><header className="customer-detail-header"><div><p className="eyebrow">CHI TIẾT YÊU CẦU · #{active._id.slice(-6).toUpperCase()}</p><h2>{active.subject || 'Yêu cầu hỗ trợ'}</h2><p>{active.mode === 'human' ? (active.assignedAgent ? `Đang xử lý bởi ${active.assignedAgent.name}` : 'Đã chuyển cho đội hỗ trợ') : 'Đang hỗ trợ bởi Support Assistant'}</p></div><span className={`status-pill ${active.status}`}>{labelStatus(active.status)}</span></header><div className="ticket-metadata"><span><b>Trạng thái</b>{labelStatus(active.status)}</span><span><b>Kênh xử lý</b>{active.mode === 'human' ? 'Nhân viên hỗ trợ' : 'Support Assistant'}</span><span><b>Cập nhật</b>{relativeTime(active.lastMessageAt)}</span></div><div className="customer-timeline"><p className="eyebrow">DÒNG THỜI GIAN TRAO ĐỔI</p>{messages.length === 0 ? <p className="empty">Chưa có tin nhắn trong yêu cầu này.</p> : messages.filter((message) => message.messageType !== 'internal_note').map((message) => <MessageBubble key={message._id} message={message} onDownload={downloadAttachment} />)}</div><div className="handoff-panel"><div><strong>Cần trao đổi với nhân viên?</strong><p>Yêu cầu này sẽ được chuyển sang quy trình hỗ trợ bởi con người theo dữ liệu hệ thống cho phép.</p></div><button className="action outline" disabled={busy || active.mode === 'human'} onClick={handoff}>{active.mode === 'human' ? 'Đã yêu cầu nhân viên hỗ trợ' : 'Yêu cầu nhân viên hỗ trợ'}</button></div><form className="message-composer" onSubmit={sendMessage}><input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Nhập nội dung cần bổ sung..." /><AttachmentControl onUpload={uploadAttachment} busy={busy} /><button className="send-button" aria-label="Gửi tin nhắn" disabled={busy || !draft.trim()}>➤</button></form></> : <EmptyConversation />}</section></section>
+}
+
+function CustomerKnowledge({ articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy, startFromQuickAction }: { articles: Article[]; articleQuery: string; setArticleQuery: (value: string) => void; loadArticles: (query?: string) => Promise<void>; articlesLoading: boolean; busy: boolean; startFromQuickAction: (subject: string) => void }) {
+  return <section className="customer-kb"><header><div><p className="kicker">PUBLISHED KNOWLEDGE BASE</p><h2>Tìm câu trả lời nhanh</h2><p>Chỉ hiển thị các bài viết đã xuất bản. Nếu chưa giải quyết được, bạn có thể tạo yêu cầu hỗ trợ.</p></div></header><form className="kb-search" onSubmit={(event) => { event.preventDefault(); void loadArticles(articleQuery) }}><input value={articleQuery} onChange={(event) => setArticleQuery(event.target.value)} placeholder="Tìm theo chủ đề, từ khóa hoặc nội dung" /><button className="action primary" disabled={busy || articlesLoading}>{articlesLoading ? 'Đang tìm…' : 'Tìm kiếm'}</button></form><div className="customer-articles">{articlesLoading ? <p className="empty">Đang tải các bài viết đã xuất bản…</p> : articles.map((article) => <article key={article._id}><div><h3>{article.title}</h3><p>{article.content}</p><div>{article.tags.map((tag) => <span className="tag" key={tag}>{tag}</span>)}</div><small>Cập nhật {new Date(article.updatedAt).toLocaleDateString('vi-VN')}</small></div><button className="action outline" onClick={() => startFromQuickAction(`Cần hỗ trợ: ${article.title}`)}>Vẫn cần hỗ trợ</button></article>)}{!articlesLoading && !articles.length && <div className="customer-empty"><strong>{articleQuery ? 'Không tìm thấy bài viết phù hợp.' : 'Chưa có bài viết đã xuất bản.'}</strong><span>Hãy thử từ khóa khác hoặc tạo yêu cầu hỗ trợ.</span><button className="action outline" onClick={() => startFromQuickAction('Yêu cầu hỗ trợ mới')}>Tạo yêu cầu</button></div>}</div></section>
 }
 
 function AgentInbox(props: { conversations: Conversation[]; allConversations: Conversation[]; active: Conversation | null; messages: Message[]; ticketQuery: string; setTicketQuery: (value: string) => void; statusFilter: 'all' | Status; setStatusFilter: (value: 'all' | Status) => void; priorityFilter: 'all' | Priority; setPriorityFilter: (value: 'all' | Priority) => void; selectConversation: (conversation: Conversation) => void; draft: string; setDraft: (value: string) => void; sendMessage: (event: FormEvent) => void; updateStatus: (status: Status) => void; updateMetadata: (changes: Partial<Pick<Conversation, 'priority' | 'category'>>) => void; addInternalNote: (content: string) => void; handoff: () => void; busy: boolean }) {
@@ -225,11 +280,12 @@ function AccountManager({ accounts, accountQuery, setAccountQuery, accountRole, 
 function EmptyConversation() { return <div className="empty-conversation"><p className="eyebrow">INBOX</p><h2>Chọn một ticket</h2><p>Thông tin trao đổi và điều khiển xử lý sẽ hiện ở đây.</p></div> }
 function Metric({ label, value }: { label: string; value: number }) { return <div className="metric"><span>{label}</span><strong>{value}</strong></div> }
 function WelcomeMessage() { return <article className="bubble ai"><small>Support Assistant</small><p>Xin chào! Bạn đang cần hỗ trợ về vấn đề gì?</p></article> }
-function MessageBubble({ message }: { message: Message }) { const internal = message.messageType === 'internal_note'; const label = internal ? 'Ghi chú nội bộ' : message.senderType === 'customer' ? 'Khách hàng' : message.senderType === 'agent' ? 'Nhân viên hỗ trợ' : message.senderType === 'system' ? 'Hệ thống' : 'Support Assistant'; return <article className={`bubble ${internal ? 'internal-note-bubble' : message.senderType}`}><small>{label}<time>{new Date(message.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</time></small><p>{message.content}</p></article> }
+function AttachmentControl({ onUpload, busy }: { onUpload: (file: File) => Promise<void>; busy: boolean }) { return <label className="attachment-control" title="Đính kèm JPG, PNG, WebP, PDF hoặc TXT (tối đa 5 MB)"><input type="file" accept="image/jpeg,image/png,image/webp,application/pdf,text/plain" disabled={busy} onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ''; if (file) void onUpload(file) }} /><span>📎</span></label> }
+function MessageBubble({ message, onDownload }: { message: Message; onDownload?: (message: Message) => Promise<void> }) { const internal = message.messageType === 'internal_note'; const label = internal ? 'Ghi chú nội bộ' : message.senderType === 'customer' ? 'Khách hàng' : message.senderType === 'agent' ? 'Nhân viên hỗ trợ' : message.senderType === 'system' ? 'Hệ thống' : 'Support Assistant'; const attachment = message.messageType === 'file'; return <article className={`bubble ${internal ? 'internal-note-bubble' : message.senderType}`}><small>{label}<time>{new Date(message.createdAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</time></small><p>{message.content}</p>{attachment && onDownload && <button className="attachment-download" onClick={() => void onDownload(message)}>Tải xuống {message.metadata?.fileName ?? 'tệp đính kèm'}</button>}</article> }
 function labelStatus(status: Status) { return ({ open: 'Mới mở', pending: 'Đang xử lý', resolved: 'Đã hoàn tất', closed: 'Đã đóng' })[status] }
 function labelPriority(priority: Priority) { return ({ low: 'Thấp', normal: 'Bình thường', high: 'Cao', urgent: 'Khẩn cấp' })[priority] }
 function labelCategory(category: Category) { return ({ general: 'Chung', account: 'Tài khoản', billing: 'Thanh toán', technical: 'Kỹ thuật', other: 'Khác' })[category] }
 function relativeTime(value: string) { const minutes = Math.max(1, Math.round((Date.now() - new Date(value).getTime()) / 60000)); return minutes < 60 ? `${minutes} phút trước` : `${Math.floor(minutes / 60)} giờ trước` }
-async function request<T>(path: string, token = '', options: RequestInit = {}): Promise<T> { const response = await fetch(`${API}${path}`, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } }); const data = await response.json().catch(() => ({})) as T & { message?: string }; if (!response.ok) throw new Error(data.message ?? `Lỗi ${response.status}`); return data }
+async function request<T>(path: string, token = '', options: RequestInit = {}): Promise<T> { const headers = new Headers(options.headers); if (!(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json'); if (token) headers.set('Authorization', `Bearer ${token}`); const response = await fetch(`${API}${path}`, { ...options, headers }); const data = await response.json().catch(() => ({})) as T & { message?: string }; if (!response.ok) throw new Error(data.message ?? `Lỗi ${response.status}`); return data }
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'Có lỗi xảy ra' }
 export default App

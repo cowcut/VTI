@@ -17,6 +17,7 @@
     "clean": "rm -rf backend/dist frontend/dist frontend/.cache"
   },
   "dependencies": {
+    "@types/multer": "^2.2.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -26,6 +27,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.9.2",
     "morgan": "^1.11.0",
+    "multer": "^2.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
