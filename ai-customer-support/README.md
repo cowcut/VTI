@@ -67,6 +67,14 @@ npm run create:admin
 - `agent`: xử lý ticket chưa gán hoặc được gán cho họ.
 - `admin`: quản lý ticket và tab quản lý tài khoản; có thể đổi role/khóa/mở khóa account.
 
+## Knowledge Base và quản lý ticket
+
+- Public FAQ/Knowledge Base: `GET /api/knowledge-base` và `GET /api/knowledge-base/search?q=<query>`.
+- Chỉ admin được tạo, sửa và xóa bài viết Knowledge Base qua `POST`, `PATCH /:id`, `DELETE /:id` trên `/api/knowledge-base`.
+- Khi customer nhắn tin trong AI mode, backend tìm tối đa ba bài Knowledge Base đã publish liên quan và đưa chúng vào Gemini prompt.
+- Agent đã nhận ticket (hoặc admin) có thể cập nhật `priority` (`low`, `normal`, `high`, `urgent`) và `category` (`general`, `account`, `billing`, `technical`, `other`) qua `PATCH /api/conversations/:id/metadata`.
+- Internal note dùng `POST /api/conversations/:id/internal-notes`; note chỉ hiển thị cho agent/admin, không trả về cho customer và không được gửi vào Gemini prompt.
+
 ## Test layout
 
 Backend unit tests nằm trong:
@@ -76,4 +84,13 @@ backend/tests/unit/
 ```
 
 Test build source TypeScript vào `backend/dist/` trước, rồi chạy Node built-in test runner. `dist/`, frontend build output và TypeScript cache là generated artifacts; không cần lưu vào Git.
+
+## Triển khai Render
+
+Blueprint `render.yaml` đã khai báo API và static frontend với chung root dependency installation. Khi tạo Blueprint từ repository `VTI`, chọn đường dẫn `ai-customer-support/render.yaml`.
+
+- API: `https://api.suptid.fun` với health check `/api/health`.
+- Frontend: `https://support.suptid.fun`.
+- Giá trị bí mật `MONGODB_URI`, `JWT_SECRET` và `GEMINI_API_KEY` được để `sync: false`; nhập trực tiếp trong Render, không đưa vào Git.
+- Kiểm tra biến `CORS_ORIGINS=https://support.suptid.fun` và build lại frontend nếu thay đổi `VITE_API_BASE_URL`.
 

@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { User } from "../models/User.model";
 import { AuthenticatedRequest } from "../types/auth";
 import { signAuthToken } from "../utils/jwt";
+import { normalizeLoginInput, normalizeRegistrationInput } from "../services/auth-input.service";
 
 const sanitizeUser = (user: any) => ({
   id: user._id.toString(),
@@ -21,23 +22,12 @@ export const register = async (
   next: NextFunction
 ) => {
   try {
-    const { name, email, password, role } = req.body;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Name, email and password are required",
-      });
+    let input;
+    try { input = normalizeRegistrationInput(req.body ?? {}); } catch (error) {
+      return res.status(400).json({ success: false, message: error instanceof Error ? error.message : "Invalid registration input" });
     }
 
-    if (password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 6 characters",
-      });
-    }
-
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: input.email });
     if (existingUser) {
       return res.status(409).json({
         success: false,
@@ -45,7 +35,7 @@ export const register = async (
       });
     }
 
-    const user = await User.create({ name, email, password, role: "customer" });
+    const user = await User.create({ ...input, role: "customer" });
     const token = signAuthToken(user._id.toString());
 
     return res.status(201).json({
@@ -65,17 +55,13 @@ export const login = async (
   next: NextFunction
 ) => {
   try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: "Email and password are required",
-      });
+    let input;
+    try { input = normalizeLoginInput(req.body ?? {}); } catch (error) {
+      return res.status(400).json({ success: false, message: error instanceof Error ? error.message : "Invalid login input" });
     }
 
-    const user = await User.findOne({ email }).select("+password");
-    if (!user || !(await user.comparePassword(password))) {
+    const user = await User.findOne({ email: input.email }).select("+password");
+    if (!user || !(await user.comparePassword(input.password))) {
       return res.status(401).json({
         success: false,
         message: "Invalid email or password",

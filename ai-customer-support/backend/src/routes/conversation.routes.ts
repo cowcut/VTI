@@ -5,6 +5,8 @@ import {
   getConversations,
   getMessages,
   handoffConversation,
+  createInternalNote,
+  updateConversationMetadata,
   updateConversationStatus,
 } from "../controllers/conversation.controller";
 import { protect } from "../middleware/auth.middleware";
@@ -16,7 +18,9 @@ router.use(protect);
 router.post("/", createConversation);
 router.get("/", getConversations);
 router.patch("/:id/status", updateConversationStatus);
+router.patch("/:id/metadata", updateConversationMetadata);
 router.post("/:id/handoff", handoffConversation);
+router.post("/:id/internal-notes", createInternalNote);
 router.get("/:id/messages", getMessages);
 router.post("/:id/messages", messageRateLimiter, createMessage);
 

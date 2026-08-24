@@ -1,7 +1,7 @@
 import { Document, model, Schema, Types } from "mongoose";
 
 export type MessageSenderType = "customer" | "agent" | "ai" | "system";
-export type MessageType = "text" | "image" | "file" | "system";
+export type MessageType = "text" | "image" | "file" | "system" | "internal_note";
 
 export interface IMessage extends Document {
   conversation: Types.ObjectId;
@@ -34,7 +34,7 @@ const messageSchema = new Schema<IMessage>(
     },
     messageType: {
       type: String,
-      enum: ["text", "image", "file", "system"],
+      enum: ["text", "image", "file", "system", "internal_note"],
       default: "text",
     },
     content: {

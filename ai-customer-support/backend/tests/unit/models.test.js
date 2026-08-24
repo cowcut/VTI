@@ -13,6 +13,8 @@ test("Conversation defaults to an open AI conversation", async () => {
 
   assert.equal(conversation.status, "open");
   assert.equal(conversation.mode, "ai");
+  assert.equal(conversation.priority, "normal");
+  assert.equal(conversation.category, "general");
   assert.equal(conversation.customer.toString(), customerId.toString());
 });
 
@@ -30,4 +32,17 @@ test("Message requires content and supports customer sender", async () => {
 
   assert.equal(message.senderType, "customer");
   assert.equal(message.messageType, "text");
+});
+
+test("Message supports staff-only internal notes", async () => {
+  const note = new Message({
+    conversation: new mongoose.Types.ObjectId(),
+    sender: new mongoose.Types.ObjectId(),
+    senderType: "agent",
+    messageType: "internal_note",
+    content: "Khách cần xác minh thông tin trước khi hoàn tiền.",
+  });
+
+  await note.validate();
+  assert.equal(note.messageType, "internal_note");
 });

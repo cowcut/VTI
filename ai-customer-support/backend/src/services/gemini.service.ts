@@ -1,4 +1,5 @@
 type PromptMessage = { senderType: string; content: string };
+type KnowledgeArticle = { title: string; content: string; tags?: string[] };
 
 type GeminiConfig = {
   apiKey?: string;
@@ -20,8 +21,9 @@ export const parseGeminiSupportReply = (text: string): GeminiSupportReply => {
   return { content: parsed.reply.trim().slice(0, 5000), requiresHuman: parsed.requiresHuman };
 };
 
-export const buildSupportPrompt = ({ subject, messages }: { subject?: string; messages: PromptMessage[] }) => {
+export const buildSupportPrompt = ({ subject, messages, knowledge = [] }: { subject?: string; messages: PromptMessage[]; knowledge?: KnowledgeArticle[] }) => {
   const history = messages.slice(-12).map((message) => `${message.senderType.toUpperCase()}: ${message.content}`).join("\n");
+  const knowledgeContext = knowledge.map((article) => `Tiêu đề: ${article.title}\nNội dung: ${article.content}`).join("\n\n");
   return [
     "Bạn là trợ lý hỗ trợ khách hàng cho một ứng dụng phần mềm.",
     "Trả lời bằng tiếng Việt, lịch sự, ngắn gọn và hữu ích.",
@@ -29,13 +31,15 @@ export const buildSupportPrompt = ({ subject, messages }: { subject?: string; me
     "Nếu thiếu thông tin, khách yêu cầu nhân viên, hoặc bạn không chắc chắn, hãy đặt requiresHuman là true.",
     "Chỉ trả JSON hợp lệ theo dạng: {\"reply\":\"câu trả lời cho khách\",\"requiresHuman\":true hoặc false}. Không thêm Markdown hoặc văn bản ngoài JSON.",
     `Chủ đề ticket: ${subject || "Yêu cầu hỗ trợ"}`,
+    "Knowledge Base liên quan (chỉ dùng khi phù hợp):",
+    knowledgeContext || "Không có bài viết liên quan.",
     "Lịch sử hội thoại:",
     history || "Chưa có tin nhắn trước đó.",
   ].join("\n\n");
 };
 
 export const generateGeminiReply = async (
-  input: { subject?: string; messages: PromptMessage[] },
+  input: { subject?: string; messages: PromptMessage[]; knowledge?: KnowledgeArticle[] },
   config: GeminiConfig = {},
 ): Promise<GeminiSupportReply | null> => {
   const apiKey = config.apiKey ?? process.env.GEMINI_API_KEY;

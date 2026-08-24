@@ -1,0 +1,33 @@
+services:
+  - type: web
+    runtime: node
+    name: suptid-ai-support-api
+    rootDir: ai-customer-support
+    buildCommand: npm ci && npm run build:backend
+    startCommand: npm --prefix backend run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
+      - key: CORS_ORIGINS
+        value: https://support.suptid.fun
+
+  - type: web
+    runtime: static
+    name: suptid-ai-support-web
+    rootDir: ai-customer-support
+    buildCommand: npm ci && npm run build:frontend
+    staticPublishPath: ai-customer-support/frontend/dist
+    envVars:
+      - key: VITE_API_BASE_URL
+        value: https://api.suptid.fun

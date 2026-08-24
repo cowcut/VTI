@@ -10,4 +10,6 @@ const endpoints = routes.stack
 test("conversation API exposes handoff and status endpoints", () => {
   assert.ok(endpoints.includes("PATCH /:id/status"));
   assert.ok(endpoints.includes("POST /:id/handoff"));
+  assert.ok(endpoints.includes("PATCH /:id/metadata"));
+  assert.ok(endpoints.includes("POST /:id/internal-notes"));
 });

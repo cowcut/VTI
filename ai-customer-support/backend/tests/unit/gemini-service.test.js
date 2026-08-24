@@ -26,3 +26,15 @@ test("Gemini prompt contains bounded conversation history and handoff instructio
   assert.match(prompt, /không chắc chắn/i);
   assert.match(prompt, /không được bịa/i);
 });
+
+test("Gemini prompt includes only supplied published knowledge-base context", () => {
+  const prompt = buildSupportPrompt({
+    subject: "Khó đăng nhập",
+    messages: [],
+    knowledge: [{ title: "Đặt lại mật khẩu", content: "Dùng chức năng Quên mật khẩu.", tags: ["tài khoản"] }],
+  });
+
+  assert.match(prompt, /Knowledge Base/i);
+  assert.match(prompt, /Đặt lại mật khẩu/);
+  assert.match(prompt, /Quên mật khẩu/);
+});

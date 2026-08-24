@@ -10,6 +10,8 @@ import {
   isAgent,
 } from "../services/conversation-access.service";
 import { generateGeminiReply, shouldGenerateAiReply } from "../services/gemini.service";
+import { findRelevantKnowledge } from "../services/knowledge-base.service";
+import { normalizeTicketMetadata } from "../services/ticket-management.service";
 import { AuthenticatedRequest } from "../types/auth";
 
 const allowedStatuses = ["open", "pending", "resolved", "closed"] as const;
@@ -54,7 +56,9 @@ export const getMessages = async (req: AuthenticatedRequest, res: Response, next
     const conversation = await Conversation.findById(req.params.id);
     if (!conversation) return res.status(404).json({ success: false, message: "Conversation not found" });
     if (!canAccessConversation(conversation, req.user)) return res.status(403).json({ success: false, message: "Access denied" });
-    const messages = await Message.find({ conversation: conversation._id }).populate("sender", "name email role avatar").sort({ createdAt: 1 });
+    const messageQuery: Record<string, unknown> = { conversation: conversation._id };
+    if (!isAgent(req.user) && !isAdmin(req.user)) messageQuery.messageType = { $ne: "internal_note" };
+    const messages = await Message.find(messageQuery).populate("sender", "name email role avatar").sort({ createdAt: 1 });
     return res.status(200).json({ success: true, conversation, messages });
   } catch (error) { return next(error); }
 };
@@ -82,8 +86,9 @@ export const createMessage = async (req: AuthenticatedRequest, res: Response, ne
     let handoffMessage = null;
     if (shouldGenerateAiReply({ senderType, mode: conversation.mode })) {
       try {
-        const history = await Message.find({ conversation: conversation._id }).sort({ createdAt: 1 }).select("senderType content");
-        const reply = await generateGeminiReply({ subject: conversation.subject, messages: history });
+        const history = await Message.find({ conversation: conversation._id, messageType: { $ne: "internal_note" } }).sort({ createdAt: 1 }).select("senderType content");
+        const knowledge = await findRelevantKnowledge(content);
+        const reply = await generateGeminiReply({ subject: conversation.subject, messages: history, knowledge });
         if (reply) {
           aiMessage = await Message.create({ conversation: conversation._id, senderType: "ai", content: reply.content, metadata: { requiresHuman: reply.requiresHuman } });
           conversation.lastMessageAt = aiMessage.createdAt;
@@ -116,6 +121,33 @@ export const updateConversationStatus = async (req: AuthenticatedRequest, res: R
     conversation.status = status as typeof conversation.status;
     await conversation.save();
     return res.status(200).json({ success: true, conversation });
+  } catch (error) { return next(error); }
+};
+
+export const updateConversationMetadata = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!validObjectId(String(req.params.id))) return res.status(400).json({ success: false, message: "Invalid conversation id" });
+    let changes;
+    try { changes = normalizeTicketMetadata(req.body ?? {}); } catch (error) { return res.status(400).json({ success: false, message: error instanceof Error ? error.message : "Invalid ticket metadata" }); }
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) return res.status(404).json({ success: false, message: "Conversation not found" });
+    if (!canManageConversation(conversation, req.user)) return res.status(403).json({ success: false, message: "Only the assigned agent or admin can update ticket metadata" });
+    Object.assign(conversation, changes);
+    await conversation.save();
+    return res.json({ success: true, conversation });
+  } catch (error) { return next(error); }
+};
+
+export const createInternalNote = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!validObjectId(String(req.params.id))) return res.status(400).json({ success: false, message: "Invalid conversation id" });
+    const content = typeof req.body.content === "string" ? req.body.content.trim() : "";
+    if (!content || content.length > 5000) return res.status(400).json({ success: false, message: "Internal note must be 1 to 5000 characters" });
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) return res.status(404).json({ success: false, message: "Conversation not found" });
+    if (!canManageConversation(conversation, req.user)) return res.status(403).json({ success: false, message: "Only the assigned agent or admin can add internal notes" });
+    const note = await Message.create({ conversation: conversation._id, sender: req.user!._id, senderType: "agent", messageType: "internal_note", content });
+    return res.status(201).json({ success: true, note });
   } catch (error) { return next(error); }
 };
 
