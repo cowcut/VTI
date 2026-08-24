@@ -7,12 +7,14 @@ import authRoutes from "./routes/auth.routes";
 import conversationRoutes from "./routes/conversation.routes";
 import accountRoutes from "./routes/account.routes";
 import knowledgeBaseRoutes from "./routes/knowledge-base.routes";
+import notificationRoutes from "./routes/notification.routes";
 import { errorHandler, notFound } from "./middleware/error.middleware";
 import { getCorsOptions } from "./config/security";
 
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1);
 
 const corsOptions = getCorsOptions({
   nodeEnv: process.env.NODE_ENV,
@@ -33,6 +35,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/conversations", conversationRoutes);
 app.use("/api/accounts", accountRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({

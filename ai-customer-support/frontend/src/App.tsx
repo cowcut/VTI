@@ -14,6 +14,7 @@ type Conversation = { _id: string; subject?: string; status: Status; mode: 'ai' 
 type AttachmentMetadata = { fileName?: string; mimeType?: string; size?: number }
 type Message = { _id: string; content: string; senderType: 'customer' | 'agent' | 'ai' | 'system'; messageType?: 'message' | 'file' | 'system' | 'internal_note'; metadata?: AttachmentMetadata; createdAt: string }
 type Article = { _id: string; title: string; content: string; tags: string[]; isPublished?: boolean; updatedAt: string }
+type Notification = { _id: string; title: string; body: string; readAt?: string | null; createdAt: string }
 type Api<T> = { success: boolean; message?: string } & T
 type Auth = { token?: string; user?: User; message?: string }
 
@@ -50,6 +51,8 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [conversationsLoading, setConversationsLoading] = useState(false)
   const [articlesLoading, setArticlesLoading] = useState(false)
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
 
   const isStaff = user?.role === 'admin' || user?.role === 'agent'
   const isAdmin = user?.role === 'admin'
@@ -89,6 +92,10 @@ function App() {
       setArticles((await request<Api<{ articles: Article[] }>>(path, token)).articles)
     } catch (error) { setNotice(errorText(error)) } finally { setArticlesLoading(false) }
   }, [token])
+  const loadNotifications = useCallback(async () => {
+    if (!token) return
+    try { const data = await request<Api<{ notifications: Notification[]; unreadCount: number }>>('/api/notifications?limit=12', token); setNotifications(data.notifications); setUnreadNotifications(data.unreadCount) } catch { /* non-critical */ }
+  }, [token])
   const restoreSession = useCallback(async () => {
     try {
       const data = await request<Api<{ user: User }>>('/api/auth/me', token)
@@ -98,6 +105,7 @@ function App() {
   }, [loadConversations, logout, token])
 
   useEffect(() => { if (token) void restoreSession() }, [restoreSession, token])
+  useEffect(() => { if (!token) return; void loadNotifications(); const timer = window.setInterval(() => void loadNotifications(), 30_000); return () => window.clearInterval(timer) }, [loadNotifications, token])
   useEffect(() => { if (active && token) void loadMessages(active._id) }, [active, loadMessages, token])
   useEffect(() => { if (isStaff) setView('inbox') }, [isStaff])
   useEffect(() => { if (view === 'accounts' && isAdmin) void loadAccounts() }, [view, isAdmin, loadAccounts])
@@ -190,7 +198,7 @@ function App() {
 
   if (!user) return <AuthScreen {...{ authMode, setAuthMode, name, setName, email, setEmail, password, setPassword, busy, notice, onSubmit: submitAuth }} />
   return <main className="app-frame">
-    <Topbar {...{ user, view, setView, isStaff, isAdmin, logout }} />
+    <Topbar {...{ user, view, setView, isStaff, isAdmin, logout, notifications, unreadNotifications, loadNotifications }} />
     {view === 'accounts' && isAdmin ? <AccountManager {...{ accounts, accountQuery, setAccountQuery, accountRole, setAccountRole, loadAccounts, updateAccount, user, busy }} />
       : view === 'knowledge' && isAdmin ? <KnowledgeBase {...{ articles, articleQuery, setArticleQuery, loadArticles, editingArticle, setEditingArticle, saveArticle, deleteArticle, busy }} />
         : view === 'widget' || !isStaff ? <CustomerPortal {...{ user, customerTab, setCustomerTab, conversations, conversationsLoading, active, selectConversation: setActive, messages, subject: newSubject, setSubject: setNewSubject, draft, setDraft, createConversation, sendMessage, uploadAttachment, downloadAttachment, handoff, articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy }} />
@@ -205,8 +213,8 @@ function AuthScreen(props: { authMode: 'login' | 'register'; setAuthMode: (mode:
   return <main className="auth-page"><section className="auth-card"><div className="logo-mark">✦</div><p className="product-name">CUSTOMER SUPPORT</p><h1>Trung tâm hỗ trợ thông minh.</h1><p>Tạo yêu cầu, theo dõi xử lý và trao đổi trực tiếp với đội hỗ trợ.</p><div className="auth-tabs"><button className={p.authMode === 'login' ? 'selected' : ''} onClick={() => p.setAuthMode('login')}>Đăng nhập</button><button className={p.authMode === 'register' ? 'selected' : ''} onClick={() => p.setAuthMode('register')}>Đăng ký</button></div><form onSubmit={p.onSubmit}>{p.authMode === 'register' && <input required minLength={2} value={p.name} onChange={(e) => p.setName(e.target.value)} placeholder="Họ và tên" />}<input required type="email" value={p.email} onChange={(e) => p.setEmail(e.target.value)} placeholder="Email" /><input required minLength={6} value={p.password} onChange={(e) => p.setPassword(e.target.value)} type="password" placeholder="Mật khẩu" /><button className="action primary" disabled={p.busy}>{p.busy ? 'Đang xử lý...' : p.authMode === 'login' ? 'Đăng nhập' : 'Tạo tài khoản'}</button></form>{p.notice && <p className="form-notice">{p.notice}</p>}</section></main>
 }
 
-function Topbar({ user, view, setView, isStaff, isAdmin, logout }: { user: User; view: View; setView: (view: View) => void; isStaff: boolean; isAdmin: boolean; logout: () => void }) {
-  return <header className="topbar"><div className="brand"><div className="logo-mark">✦</div><div><strong>Care<br />Desk</strong><small>Operations workspace</small></div></div><nav><button className={view === 'widget' ? 'nav-active' : ''} onClick={() => setView('widget')}>Customer</button>{isStaff && <button className={view === 'inbox' ? 'nav-active' : ''} onClick={() => setView('inbox')}>Inbox</button>}{isAdmin && <button className={view === 'knowledge' ? 'nav-active' : ''} onClick={() => setView('knowledge')}>Knowledge base</button>}{isAdmin && <button className={view === 'accounts' ? 'nav-active' : ''} onClick={() => setView('accounts')}>Tài khoản</button>}<span className="nav-note">● Online</span></nav><div className="account"><span>{user.name}</span><small>{user.role}</small><button onClick={logout}>Đăng xuất</button></div></header>
+function Topbar({ user, view, setView, isStaff, isAdmin, logout, notifications, unreadNotifications, loadNotifications }: { user: User; view: View; setView: (view: View) => void; isStaff: boolean; isAdmin: boolean; logout: () => void; notifications: Notification[]; unreadNotifications: number; loadNotifications: () => Promise<void> }) {
+  return <header className="topbar"><div className="brand"><div className="logo-mark">✦</div><div><strong>Care<br />Desk</strong><small>Operations workspace</small></div></div><nav><button className={view === 'widget' ? 'nav-active' : ''} onClick={() => setView('widget')}>Customer</button>{isStaff && <button className={view === 'inbox' ? 'nav-active' : ''} onClick={() => setView('inbox')}>Inbox</button>}{isAdmin && <button className={view === 'knowledge' ? 'nav-active' : ''} onClick={() => setView('knowledge')}>Knowledge base</button>}{isAdmin && <button className={view === 'accounts' ? 'nav-active' : ''} onClick={() => setView('accounts')}>Tài khoản</button>}<span className="nav-note">● Online</span></nav><details className="notifications"><summary onClick={() => void loadNotifications()}>🔔{unreadNotifications ? <b>{unreadNotifications}</b> : null}</summary><div>{notifications.length ? notifications.map((item) => <article key={item._id}><strong>{item.title}</strong><span>{item.body}</span><small>{relativeTime(item.createdAt)}</small></article>) : <p>Chưa có thông báo.</p>}</div></details><div className="account"><span>{user.name}</span><small>{user.role}</small><button onClick={logout}>Đăng xuất</button></div></header>
 }
 
 function CustomerPortal({ user, customerTab, setCustomerTab, conversations, conversationsLoading, active, selectConversation, messages, subject, setSubject, draft, setDraft, createConversation, sendMessage, uploadAttachment, downloadAttachment, handoff, articles, articleQuery, setArticleQuery, loadArticles, articlesLoading, busy }: { user: User; customerTab: CustomerTab; setCustomerTab: (tab: CustomerTab) => void; conversations: Conversation[]; conversationsLoading: boolean; active: Conversation | null; selectConversation: (conversation: Conversation) => void; messages: Message[]; subject: string; setSubject: (value: string) => void; draft: string; setDraft: (value: string) => void; createConversation: (event: FormEvent) => void; sendMessage: (event: FormEvent) => void; uploadAttachment: (file: File) => Promise<void>; downloadAttachment: (message: Message) => Promise<void>; handoff: () => void; articles: Article[]; articleQuery: string; setArticleQuery: (value: string) => void; loadArticles: (query?: string) => Promise<void>; articlesLoading: boolean; busy: boolean }) {

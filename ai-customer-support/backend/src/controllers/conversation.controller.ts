@@ -12,6 +12,7 @@ import {
 import { generateGeminiReply, shouldGenerateAiReply } from "../services/gemini.service";
 import { findRelevantKnowledge } from "../services/knowledge-base.service";
 import { normalizeTicketMetadata } from "../services/ticket-management.service";
+import { createNotification } from "../services/notification.service";
 import { AuthenticatedRequest } from "../types/auth";
 
 const allowedStatuses = ["open", "pending", "resolved", "closed"] as const;
@@ -81,6 +82,8 @@ export const createMessage = async (req: AuthenticatedRequest, res: Response, ne
     if (senderType === "agent") { conversation.mode = "human"; conversation.status = "pending"; }
     if (senderType === "customer" && conversation.status === "resolved") conversation.status = "open";
     await conversation.save();
+    if (senderType === "agent") void createNotification({ recipient: conversation.customer, conversation: conversation._id, type: "agent_reply", title: "Bạn có phản hồi mới", body: conversation.subject || "Nhân viên hỗ trợ đã trả lời ticket của bạn." }).catch(console.error);
+    if (senderType === "customer" && conversation.mode === "human" && conversation.assignedAgent) void createNotification({ recipient: conversation.assignedAgent, conversation: conversation._id, type: "customer_reply", title: "Khách hàng đã phản hồi", body: conversation.subject || "Một ticket bạn phụ trách có tin nhắn mới." }).catch(console.error);
 
     let aiMessage = null;
     let handoffMessage = null;
@@ -120,6 +123,7 @@ export const updateConversationStatus = async (req: AuthenticatedRequest, res: R
     if (conversation.status !== status && !statusTransitions[conversation.status].includes(status)) return res.status(400).json({ success: false, message: `Cannot change ${conversation.status} directly to ${status}` });
     conversation.status = status as typeof conversation.status;
     await conversation.save();
+    void createNotification({ recipient: conversation.customer, conversation: conversation._id, type: "ticket_status", title: "Ticket đã đổi trạng thái", body: `${conversation.subject || "Yêu cầu hỗ trợ"}: ${status}` }).catch(console.error);
     return res.status(200).json({ success: true, conversation });
   } catch (error) { return next(error); }
 };
@@ -174,6 +178,8 @@ export const handoffConversation = async (req: AuthenticatedRequest, res: Respon
     const systemMessage = await Message.create({ conversation: conversation._id, sender: req.user?._id, senderType: "system", messageType: "system", content: "Cuộc hội thoại đã được chuyển cho nhân viên hỗ trợ." });
     conversation.lastMessageAt = systemMessage.createdAt;
     await conversation.save();
+    void createNotification({ recipient: conversation.customer, conversation: conversation._id, type: "ticket_handoff", title: "Ticket đã được chuyển nhân viên", body: conversation.subject || "Đội hỗ trợ sẽ phản hồi bạn sớm." }).catch(console.error);
+    void createNotification({ recipient: agentId, conversation: conversation._id, type: "ticket_handoff", title: "Bạn được giao một ticket", body: conversation.subject || "Một ticket mới cần bạn xử lý." }).catch(console.error);
     return res.status(200).json({ success: true, conversation, message: systemMessage });
   } catch (error) { return next(error); }
 };
