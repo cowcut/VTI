@@ -22,7 +22,7 @@ export interface IConversation extends Document {
   updatedAt: Date;
 }
 
-const conversationSchema = new Schema<IConversation>(https://support.suptid.fun/
+const conversationSchema = new Schema<IConversation>(
   {
     customer: {
       type: Schema.Types.ObjectId,
