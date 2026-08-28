@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   createConversation,
+  generateAgentReplyDraft,
   createMessage,
   getConversations,
   getMessages,
@@ -22,6 +23,7 @@ router.patch("/:id/status", updateConversationStatus);
 router.patch("/:id/metadata", updateConversationMetadata);
 router.post("/:id/handoff", handoffConversation);
 router.post("/:id/internal-notes", createInternalNote);
+router.post("/:id/ai-draft", messageRateLimiter, generateAgentReplyDraft);
 router.post("/:id/attachments", messageRateLimiter, attachmentUpload.single("attachment"), uploadAttachment);
 router.get("/attachments/:messageId", downloadAttachment);
 router.get("/:id/messages", getMessages);

@@ -8,6 +8,8 @@ import conversationRoutes from "./routes/conversation.routes";
 import accountRoutes from "./routes/account.routes";
 import knowledgeBaseRoutes from "./routes/knowledge-base.routes";
 import notificationRoutes from "./routes/notification.routes";
+import realtimeRoutes from "./routes/realtime.routes";
+import operationsRoutes from "./routes/operations.routes";
 import { errorHandler, notFound } from "./middleware/error.middleware";
 import { getCorsOptions } from "./config/security";
 
@@ -36,6 +38,8 @@ app.use("/api/conversations", conversationRoutes);
 app.use("/api/accounts", accountRoutes);
 app.use("/api/knowledge-base", knowledgeBaseRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/realtime", realtimeRoutes);
+app.use("/api/operations", operationsRoutes);
 
 app.get("/api/health", (req, res) => {
   res.json({

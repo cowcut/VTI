@@ -10,7 +10,12 @@ import {
   isAgent,
 } from "../services/conversation-access.service";
 import { generateGeminiReply, shouldGenerateAiReply } from "../services/gemini.service";
-import { findRelevantKnowledge } from "../services/knowledge-base.service";
+import { streamGeminiSupportReply } from "../services/gemini-streaming.service";
+import { publishRealtimeEvent } from "../services/realtime.service";
+import { shouldEscalateAiReply } from "../services/ai-escalation.service";
+import { findRelevantKnowledge, recordKnowledgeGap } from "../services/knowledge-base.service";
+import { sanitizeCitations } from "../services/knowledge-base-enhancements.service";
+import { dispatchSupportTools } from "../services/support-tools.service";
 import { normalizeTicketMetadata } from "../services/ticket-management.service";
 import { createNotification } from "../services/notification.service";
 import { AuthenticatedRequest } from "../types/auth";
@@ -24,6 +29,12 @@ const statusTransitions: Record<(typeof allowedStatuses)[number], string[]> = {
 };
 
 const validObjectId = (id?: string) => Boolean(id && /^[a-f\d]{24}$/i.test(id));
+const publicMessage = (message: { toObject(): Record<string, unknown> }) => {
+  const result = message.toObject();
+  const metadata = result.metadata as Record<string, unknown> | undefined;
+  if (metadata?.citations) result.metadata = { ...metadata, citations: sanitizeCitations(metadata.citations) };
+  return result;
+};
 
 export const createConversation = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -60,7 +71,7 @@ export const getMessages = async (req: AuthenticatedRequest, res: Response, next
     const messageQuery: Record<string, unknown> = { conversation: conversation._id };
     if (!isAgent(req.user) && !isAdmin(req.user)) messageQuery.messageType = { $ne: "internal_note" };
     const messages = await Message.find(messageQuery).populate("sender", "name email role avatar").sort({ createdAt: 1 });
-    return res.status(200).json({ success: true, conversation, messages });
+    return res.status(200).json({ success: true, conversation, messages: messages.map(publicMessage) });
   } catch (error) { return next(error); }
 };
 
@@ -79,7 +90,7 @@ export const createMessage = async (req: AuthenticatedRequest, res: Response, ne
 
     const message = await Message.create({ conversation: conversation._id, sender: req.user?._id, senderType, content });
     conversation.lastMessageAt = message.createdAt;
-    if (senderType === "agent") { conversation.mode = "human"; conversation.status = "pending"; }
+    if (senderType === "agent") { conversation.mode = "human"; conversation.status = "pending"; if (!conversation.firstResponseAt) conversation.firstResponseAt = message.createdAt; }
     if (senderType === "customer" && conversation.status === "resolved") conversation.status = "open";
     await conversation.save();
     if (senderType === "agent") void createNotification({ recipient: conversation.customer, conversation: conversation._id, type: "agent_reply", title: "Bạn có phản hồi mới", body: conversation.subject || "Nhân viên hỗ trợ đã trả lời ticket của bạn." }).catch(console.error);
@@ -91,24 +102,62 @@ export const createMessage = async (req: AuthenticatedRequest, res: Response, ne
       try {
         const history = await Message.find({ conversation: conversation._id, messageType: { $ne: "internal_note" } }).sort({ createdAt: 1 }).select("senderType content");
         const knowledge = await findRelevantKnowledge(content);
-        const reply = await generateGeminiReply({ subject: conversation.subject, messages: history, knowledge });
+        if (!knowledge.length) void recordKnowledgeGap(content).catch(console.error);
+        const toolContext = dispatchSupportTools(content);
+        let reply = null;
+        try {
+          for await (const event of streamGeminiSupportReply({ subject: conversation.subject, messages: history, knowledge, toolContext })) {
+            if (event.type === "progress") publishRealtimeEvent(conversation.customer.toString(), "ai_status");
+            else reply = event.reply;
+          }
+        } catch (streamError) {
+          console.error("Gemini stream failed; retrying without stream", streamError instanceof Error ? streamError.message : streamError);
+          reply = await generateGeminiReply({ subject: conversation.subject, messages: history, knowledge, toolContext });
+        }
         if (reply) {
-          aiMessage = await Message.create({ conversation: conversation._id, senderType: "ai", content: reply.content, metadata: { requiresHuman: reply.requiresHuman } });
+          const requiresHuman = shouldEscalateAiReply({ customerMessage: content, reply });
+          const metadata = {
+            requiresHuman,
+            ...(reply.confidence !== undefined ? { confidence: reply.confidence } : {}),
+            ...(reply.sentiment !== undefined ? { sentiment: reply.sentiment } : {}),
+            ...(reply.citations?.length ? { citations: reply.citations } : {}),
+            ...(toolContext ? { toolContext } : {}),
+          };
+          aiMessage = await Message.create({ conversation: conversation._id, senderType: "ai", content: reply.content, metadata });
           conversation.lastMessageAt = aiMessage.createdAt;
-          if (reply.requiresHuman) {
+          if (!conversation.firstResponseAt) conversation.firstResponseAt = aiMessage.createdAt;
+          if (requiresHuman) {
             conversation.mode = "human";
             conversation.status = "pending";
             handoffMessage = await Message.create({ conversation: conversation._id, senderType: "system", messageType: "system", content: "AI đã chuyển yêu cầu này cho nhân viên hỗ trợ." });
             conversation.lastMessageAt = handoffMessage.createdAt;
           }
           await conversation.save();
+          publishRealtimeEvent(conversation.customer.toString(), "conversation");
         }
       } catch (aiError) {
         console.error("Gemini reply generation failed", aiError instanceof Error ? aiError.message : aiError);
       }
     }
 
-    return res.status(201).json({ success: true, message, aiMessage, handoffMessage });
+    return res.status(201).json({ success: true, message, aiMessage: aiMessage ? publicMessage(aiMessage) : null, handoffMessage });
+  } catch (error) { return next(error); }
+};
+
+export const generateAgentReplyDraft = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    if (!validObjectId(String(req.params.id))) return res.status(400).json({ success: false, message: "Invalid conversation id" });
+    if (!isAgent(req.user) && !isAdmin(req.user)) return res.status(403).json({ success: false, message: "Only support staff can generate a reply draft" });
+    const conversation = await Conversation.findById(req.params.id);
+    if (!conversation) return res.status(404).json({ success: false, message: "Conversation not found" });
+    if (!canManageConversation(conversation, req.user)) return res.status(403).json({ success: false, message: "Claim this conversation before generating a reply draft" });
+    const history = await Message.find({ conversation: conversation._id, messageType: { $ne: "internal_note" } }).sort({ createdAt: 1 }).select("senderType content");
+    const latestCustomerMessage = [...history].reverse().find((message) => message.senderType === "customer")?.content || "";
+    const knowledge = await findRelevantKnowledge(latestCustomerMessage);
+    const toolContext = dispatchSupportTools(latestCustomerMessage);
+    const reply = await generateGeminiReply({ subject: conversation.subject, messages: history, knowledge, toolContext });
+    if (!reply) return res.status(503).json({ success: false, message: "AI reply draft is unavailable" });
+    return res.json({ success: true, draft: reply.content, citations: sanitizeCitations(reply.citations) });
   } catch (error) { return next(error); }
 };
 
@@ -161,7 +210,7 @@ export const handoffConversation = async (req: AuthenticatedRequest, res: Respon
     const conversation = await Conversation.findById(req.params.id);
     if (!conversation) return res.status(404).json({ success: false, message: "Conversation not found" });
 
-    const requestedAgentId = req.body.assignedAgentId as string | undefined;
+    const requestedAgentId = (req.body ?? {}).assignedAgentId as string | undefined;
     let agentId = req.user!._id;
     if (isAdmin(req.user) && requestedAgentId) {
       if (!validObjectId(requestedAgentId)) return res.status(400).json({ success: false, message: "Invalid assigned agent id" });

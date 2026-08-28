@@ -7,7 +7,9 @@
     "test": "npm run build && node --test tests/unit/*.test.js",
     "start": "node dist/server.js",
     "create:admin": "ts-node-dev --transpile-only --exit-child src/scripts/create-admin.ts",
-    "migrate:atlas": "npm run build && node dist/scripts/migrate-to-atlas.js"
+    "migrate:atlas": "npm run build && node dist/scripts/migrate-to-atlas.js",
+    "seed:knowledge-base": "npm run build && node dist/scripts/seed-knowledge-base.js",
+    "reindex:knowledge-base-embeddings": "npm run build && node dist/scripts/reindex-knowledge-base-embeddings.js"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

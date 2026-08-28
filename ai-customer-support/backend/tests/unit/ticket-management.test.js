@@ -6,7 +6,7 @@ const { normalizeTicketMetadata } = require("../../dist/services/ticket-manageme
 test("ticket metadata accepts a supported priority and category", () => {
   assert.deepEqual(
     normalizeTicketMetadata({ priority: "high", category: "technical" }),
-    { priority: "high", category: "technical" },
+    { priority: "high", category: "technical", routingKey: "technical" },
   );
 });
 

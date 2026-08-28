@@ -1,4 +1,5 @@
 import { Document, model, Schema, Types } from "mongoose";
+import { calculateSlaDeadline, routingKeyForCategory } from "../services/ticket-management.service";
 
 export type ConversationStatus = "open" | "pending" | "resolved" | "closed";
 export type ConversationMode = "ai" | "human";
@@ -13,12 +14,15 @@ export interface IConversation extends Document {
   mode: ConversationMode;
   priority: ConversationPriority;
   category: ConversationCategory;
+  routingKey: ConversationCategory;
+  slaDeadline: Date;
+  firstResponseAt?: Date;
   lastMessageAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const conversationSchema = new Schema<IConversation>(
+const conversationSchema = new Schema<IConversation>(https://support.suptid.fun/
   {
     customer: {
       type: Schema.Types.ObjectId,
@@ -59,6 +63,20 @@ const conversationSchema = new Schema<IConversation>(
       default: "general",
       index: true,
     },
+    routingKey: {
+      type: String,
+      enum: ["general", "account", "billing", "technical", "other"],
+      default: "general",
+      index: true,
+    },
+    slaDeadline: {
+      type: Date,
+      index: true,
+    },
+    firstResponseAt: {
+      type: Date,
+      default: null,
+    },
     lastMessageAt: {
       type: Date,
       default: Date.now,
@@ -67,6 +85,11 @@ const conversationSchema = new Schema<IConversation>(
   },
   { timestamps: true }
 );
+
+conversationSchema.pre("validate", function setTicketOperationalMetadata() {
+  if (this.isModified("category")) this.routingKey = routingKeyForCategory(this.category);
+  if (this.isModified("priority") || !this.slaDeadline) this.slaDeadline = calculateSlaDeadline(this.priority, this.createdAt || new Date());
+});
 
 conversationSchema.index({ customer: 1, lastMessageAt: -1 });
 conversationSchema.index({ priority: 1, category: 1, lastMessageAt: -1 });

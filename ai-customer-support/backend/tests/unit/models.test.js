@@ -9,13 +9,33 @@ test("Conversation defaults to an open AI conversation", async () => {
   const customerId = new mongoose.Types.ObjectId();
   const conversation = new Conversation({ customer: customerId });
 
+  const validationStartedAt = Date.now();
   await conversation.validate();
 
   assert.equal(conversation.status, "open");
   assert.equal(conversation.mode, "ai");
   assert.equal(conversation.priority, "normal");
   assert.equal(conversation.category, "general");
+  assert.equal(conversation.routingKey, "general");
+  assert.ok(conversation.slaDeadline instanceof Date);
+  assert.ok(conversation.slaDeadline.getTime() - validationStartedAt >= 24 * 60 * 60 * 1000 - 1000);
+  assert.ok(conversation.slaDeadline.getTime() - validationStartedAt <= 24 * 60 * 60 * 1000 + 1000);
   assert.equal(conversation.customer.toString(), customerId.toString());
+});
+
+test("Conversation recalculates its SLA deadline when priority changes", async () => {
+  const conversation = new Conversation({ customer: new mongoose.Types.ObjectId(), priority: "high" });
+
+  const highValidationStartedAt = Date.now();
+  await conversation.validate();
+  assert.ok(conversation.slaDeadline.getTime() - highValidationStartedAt >= 4 * 60 * 60 * 1000 - 1000);
+  assert.ok(conversation.slaDeadline.getTime() - highValidationStartedAt <= 4 * 60 * 60 * 1000 + 1000);
+
+  conversation.priority = "urgent";
+  const urgentValidationStartedAt = Date.now();
+  await conversation.validate();
+  assert.ok(conversation.slaDeadline.getTime() - urgentValidationStartedAt >= 60 * 60 * 1000 - 1000);
+  assert.ok(conversation.slaDeadline.getTime() - urgentValidationStartedAt <= 60 * 60 * 1000 + 1000);
 });
 
 test("Message requires content and supports customer sender", async () => {
